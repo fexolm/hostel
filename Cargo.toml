@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 goblin = {version = "0.10.4"}
+iced-x86 = {version = "1.21.0", default-features = false, features = ["std", "decoder", "masm"]}
