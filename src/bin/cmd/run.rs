@@ -1,5 +1,5 @@
 use clap::Args;
-use hostel::loader::Loader;
+use hostel::loader::{Loader, Result as LoaderResult};
 
 #[derive(Args)]
 pub struct Cmd {
@@ -8,9 +8,9 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub fn execute(&self) {
-        let loader = Loader::new();
-        let exe = loader.load(&self.filepath);
-        exe.run();
+    pub fn execute(&self) -> LoaderResult<()> {
+        let mut loader = Loader::new()?;
+        let module = loader.load(&self.filepath);
+        Ok(())
     }
 }

@@ -18,6 +18,11 @@ fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Run(cmd) => cmd.execute(),
+        Commands::Run(cmd) => {
+            if let Err(e) = cmd.execute() {
+                eprintln!("error: {}", e);
+                std::process::exit(1);
+            }
+        }
     }
 }

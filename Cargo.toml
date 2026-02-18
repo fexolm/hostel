@@ -5,5 +5,9 @@ edition = "2024"
 
 [dependencies]
 goblin = { version = "0.10.5" }
-memmap2 = "0.9.10"
 clap = { version = "4.0", features = ["derive"] }
+thiserror = "2.0.18"
+
+kvm-bindings = "0.14.0"
+kvm-ioctls = "0.24.0"
+vm-memory = { version = "0.18.0", features = ["backend-mmap"] }
