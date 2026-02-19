@@ -17,6 +17,9 @@ pub enum Error {
 
     #[error("elf parse error: {0}")]
     Parsing(#[from] goblin::error::Error),
+
+    #[error("unexpected vCPU exit: {0}")]
+    UnexpectedExit(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
