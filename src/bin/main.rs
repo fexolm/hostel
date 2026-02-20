@@ -1,6 +1,6 @@
 mod cmd;
 
-use clap::{Command, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "hostel")]

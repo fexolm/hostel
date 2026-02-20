@@ -1,5 +1,5 @@
 use clap::Args;
-use hostel::loader::{Loader, Result as LoaderResult};
+use hostel::vm::{Result as VmResult, Vm};
 
 #[derive(Args)]
 pub struct Cmd {
@@ -8,9 +8,12 @@ pub struct Cmd {
 }
 
 impl Cmd {
-    pub fn execute(&self) -> LoaderResult<()> {
-        let mut loader = Loader::new()?;
-        let module = loader.load(&self.filepath);
+    pub fn execute(&self) -> VmResult<()> {
+        let mut vm = Vm::new()?;
+        let data = std::fs::read(&self.filepath)?;
+        vm.load_elf(&data)?;
+        vm.run()?;
+        println!("guest finished execution");
         Ok(())
     }
 }

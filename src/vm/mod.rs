@@ -1,16 +1,23 @@
-use super::error::Result;
+pub mod error;
+
+pub use self::error::{Error, Result};
+
 use kvm_bindings::kvm_userspace_memory_region;
 use kvm_ioctls::{Kvm, VmFd};
 use vm_memory::{Bytes, GuestAddress, GuestMemoryBackend, GuestMemoryMmap};
 
-const MEM_SIZE: usize = 2 * 1024 * 1024;
+// goblin is already a dependency of the workspace; we reuse it here to parse ELF
+use goblin::elf::Elf;
+use goblin::elf::program_header::PT_LOAD;
+
+const MEM_SIZE: usize = 2 * 1024 * 1024 * 1024 * 1024;
+const PAGE_SIZE: usize = 2 * 1024 * 1024;
 const GUEST_BASE: GuestAddress = GuestAddress(0);
 const PML4_ADDR: GuestAddress = GuestAddress(0x1000);
 const PDPT_ADDR: GuestAddress = GuestAddress(0x2000);
 const PD_ADDR: GuestAddress = GuestAddress(0x3000);
-const DATA_ADDR: GuestAddress = GuestAddress(0x4000);
-const CODE_ADDR: GuestAddress = GuestAddress(0x100000);
-const STACK_TOP: u64 = (MEM_SIZE - 0x1000) as u64; // stack somewhere near the top
+pub const DATA_ADDR: GuestAddress = GuestAddress(0x4000);
+const STACK_TOP: u64 = (PAGE_SIZE - 0x1000) as u64; // stack somewhere near the top
 
 // Page-table / PTE flag bits
 const PTE_PRESENT: u64 = 0x1;
@@ -34,10 +41,6 @@ const SS_SELECTOR: u16 = 0x10;
 const CS_TYPE: u8 = 0xB;
 const SS_TYPE: u8 = 0x3;
 
-const BOOT_CODE: &[u8] = &[
-    0xF4, // hlt
-];
-
 pub struct Vm {
     kvm: Kvm,
     vm: VmFd,
@@ -46,11 +49,9 @@ pub struct Vm {
 }
 
 fn init_x64(
-    kvm: &Kvm,
     vm: &VmFd,
     vcpus: &Vec<kvm_ioctls::VcpuFd>,
     boot_mem: &GuestMemoryMmap<()>,
-    boot_code: &[u8],
 ) -> Result<()> {
     // Build minimal page tables: PML4 -> PDPT -> PD (2 MiB pages)
     // PML4[0] points to PDPT, PDPT[0] points to PD, PD[0] maps the first 2MiB.
@@ -64,9 +65,6 @@ fn init_x64(
 
     // Clear observable data area (guest will write a 64-bit value here)
     boot_mem.write_slice(&0u64.to_le_bytes(), DATA_ADDR)?;
-
-    // Place the provided boot code at the expected entry point.
-    boot_mem.write_slice(&boot_code, CODE_ADDR)?;
 
     // Register the guest memory region with KVM.
     unsafe {
@@ -84,7 +82,6 @@ fn init_x64(
     // - RSP: stack pointer inside guest memory
     // - RFLAGS: set the reserved bit required by x86
     let mut regs = vcpus[0].get_regs()?;
-    regs.rip = CODE_ADDR.0; // entry point for payload
     regs.rsp = STACK_TOP; // initial stack pointer
     regs.rflags = RFLAGS_RESERVED; // required reserved bit
     vcpus[0].set_regs(&regs)?;
@@ -131,10 +128,6 @@ fn init_x64(
 
 impl Vm {
     pub fn new() -> Result<Self> {
-        Self::with_boot_code(BOOT_CODE)
-    }
-
-    fn with_boot_code(boot_code: &[u8]) -> Result<Self> {
         let kvm = Kvm::new()?;
         let vm = kvm.create_vm()?;
         let mut vcpus = Vec::new();
@@ -143,7 +136,7 @@ impl Vm {
         let boot_mem: GuestMemoryMmap<()> =
             GuestMemoryMmap::from_ranges(&[(GUEST_BASE, MEM_SIZE)])?;
 
-        init_x64(&kvm, &vm, &vcpus, &boot_mem, &boot_code)?;
+        init_x64(&vm, &vcpus, &boot_mem)?;
 
         Ok(Self {
             kvm,
@@ -152,47 +145,79 @@ impl Vm {
             boot_mem,
         })
     }
+
+    /// Load an executable ELF blob into the guest memory and adjust the entry
+    /// point accordingly.  The loader expects that the guest memory has already
+    /// been registered with KVM (done in `Vm::new`).
+    pub fn load_elf(&mut self, data: &[u8]) -> Result<()> {
+        let elf = Elf::parse(data)?;
+
+        for ph in &elf.program_headers {
+            if ph.p_type != PT_LOAD {
+                continue;
+            }
+
+            let guest_addr = GuestAddress(ph.p_paddr as u64);
+            let file_offset = ph.p_offset as usize;
+            let filesz = ph.p_filesz as usize;
+            let memsz = ph.p_memsz as usize;
+
+            // copy the initialized data from the file
+            self.boot_mem
+                .write_slice(&data[file_offset..file_offset + filesz], guest_addr)?;
+
+            // zero the remainder of the segment if any
+            if memsz > filesz {
+                let zero_addr = GuestAddress(ph.p_paddr as u64 + filesz as u64);
+                let zero_buf = vec![0u8; memsz - filesz];
+                self.boot_mem.write_slice(&zero_buf, zero_addr)?;
+            }
+        }
+
+        // update the guest RIP to the ELF entry point
+        let mut regs = self.vcpus[0].get_regs()?;
+        regs.rip = elf.entry;
+        self.vcpus[0].set_regs(&regs)?;
+
+        Ok(())
+    }
+
+    /// Run the single vCPU until it exits.  Returns an error if the exit type is
+    /// unexpected (anything other than `Hlt`).
+    pub fn run(&mut self) -> Result<()> {
+        use kvm_ioctls::VcpuExit;
+
+        match self.vcpus[0].run()? {
+            VcpuExit::Hlt => Ok(()),
+            other => Err(Error::UnexpectedExit(format!("{:?}", other))),
+        }
+    }
+
+    /// Return a reference to the guest physical memory.  This is primarily used
+    /// by tests so that they can inspect memory after the VM has executed.
+    pub fn guest_memory(&self) -> &GuestMemoryMmap<()> {
+        &self.boot_mem
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kvm_ioctls::VcpuExit;
 
     #[test]
-    fn vm_runs_boot_code_and_operates_in_64bit() {
-        const MAGIC: u64 = 0xdeadbeefcafebabeu64;
+    fn vm_loads_boot_elf_from_build_script() {
+        // the build script emits the path via the BOOT_ELF environment variable
+        let path = env!("BOOT_ELF_PATH");
+        let data = std::fs::read(path).expect("read boot elf");
 
-        // Build a tiny 64-bit payload:
-        //   movabs rax, MAGIC
-        //   mov [moffs64], rax
-        //   hlt
-        let mut code: Vec<u8> = Vec::new();
-        code.extend_from_slice(&[0x48, 0xB8]); // movabs rax, imm64
-        code.extend_from_slice(&MAGIC.to_le_bytes());
-        code.extend_from_slice(&[0x48, 0xA3]); // mov [moffs64], rax
-        code.extend_from_slice(&DATA_ADDR.0.to_le_bytes());
-        code.push(0xF4); // hlt
+        let mut vm = Vm::new().expect("create vm");
+        vm.load_elf(&data).expect("load elf");
+        vm.run().expect("run guest");
 
-        // Create a VM with our test boot code (sets up page-tables + long mode)
-        let mut vm = Vm::with_boot_code(&code).expect("create vm");
-
-        // Sanity: sregs should indicate long mode / 64-bit CS
-        let sregs = vm.vcpus[0].get_sregs().expect("get sregs");
-        assert!((sregs.efer & EFER_LMA) != 0, "expected LMA (long mode) enabled in EFER");
-        assert_eq!(sregs.cs.l, 1);
-
-        // Run the vCPU until it HLTs
-        match vm.vcpus[0].run().expect("vcpu run failed") {
-            VcpuExit::Hlt => {}
-            other => panic!("unexpected vcpu exit: {:?}", other),
-        }
-
-        // Verify guest wrote the 64-bit value to DATA_ADDR (proves 64-bit execution)
         let mut buf = [0u8; 8];
         vm.boot_mem
             .read_slice(&mut buf, DATA_ADDR)
             .expect("read guest memory");
-        assert_eq!(u64::from_le_bytes(buf), MAGIC);
+        assert_eq!(u64::from_le_bytes(buf), 0x1234_5678_9ABC_DEF0u64);
     }
 }
