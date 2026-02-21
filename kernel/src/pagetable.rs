@@ -1,4 +1,9 @@
-use crate::{constants::PAGE_SIZE, types::PhysicalAddr, Kernel};
+#![allow(unused)]
+use crate::{
+    constants::PAGE_SIZE,
+    page_alloc::{palloc, pfree},
+    types::PhysicalAddr,
+};
 
 const PRESENT: u64 = 1 << 0;
 const WRITABLE: u64 = 1 << 1;
@@ -88,28 +93,28 @@ impl PageTableAlloc {
         }
     }
 
-    pub fn alloc(&mut self, kernel: &Kernel) -> Option<u64> {
+    pub fn alloc(&mut self) -> Option<u64> {
         for i in 0..self.count {
             if let Some(index) = self.bitmap[i].alloc() {
                 return Some(self.pages[i].0 + (index as u64 * size_of::<PageTable>() as u64));
             }
         }
         if self.count < self.pages.len() {
-            let page = kernel.page_alloc.lock().alloc();
+            let page = palloc();
             self.pages[self.count] = page;
             self.count += 1;
-            return self.alloc(kernel);
+            return self.alloc();
         }
         panic!("Out of page table memory");
     }
 
-    pub fn free(&mut self, addr: u64, kernel: &Kernel) {
+    pub fn free(&mut self, addr: u64) {
         for i in 0..self.count {
             if addr >= self.pages[i].0 && addr < self.pages[i].0 + PAGE_SIZE {
                 let index = ((addr - self.pages[i].0) / size_of::<PageTable>() as u64) as usize;
                 self.bitmap[i].free(index);
                 if self.bitmap[i].bitmap.iter().all(|&b| b == 0) {
-                    kernel.page_alloc.lock().free(self.pages[i]);
+                    pfree(self.pages[i]);
 
                     self.pages.swap(i, self.count - 1);
                     self.bitmap.swap(i, self.count - 1);
@@ -176,19 +181,19 @@ mod tests {
         alloc.pages[0] = PhysicalAddr(0x1000);
         alloc.count = 1;
 
-        let addr1 = alloc.alloc(k).unwrap();
+        let addr1 = alloc.alloc().unwrap();
         assert_eq!(addr1, 0x1000);
 
         let step = core::mem::size_of::<PageTable>() as u64;
-        let addr2 = alloc.alloc(k).unwrap();
+        let addr2 = alloc.alloc().unwrap();
         assert_eq!(addr2, 0x1000 + step);
 
         // free the first slot; page is not empty, so kernel.free() is never
         // invoked.
-        alloc.free(addr1, k);
+        alloc.free(addr1);
 
         // the freed slot should be reused
-        let addr3 = alloc.alloc(k).unwrap();
+        let addr3 = alloc.alloc().unwrap();
         assert_eq!(addr3, addr1);
     }
 }

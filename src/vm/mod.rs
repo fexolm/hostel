@@ -2,6 +2,9 @@ pub mod error;
 
 pub use self::error::{Error, Result};
 
+use kernel::constants::{
+    KERNEL_PD_OFFSET, KERNEL_PDPT_OFFSET, KERNEL_PML4_IDX, KERNEL_PML4_OFFSET, KERNEL_STACK,
+};
 use kvm_bindings::kvm_userspace_memory_region;
 use kvm_ioctls::{Kvm, VmFd};
 use vm_memory::{Bytes, GuestAddress, GuestMemoryBackend, GuestMemoryMmap};
@@ -11,13 +14,11 @@ use goblin::elf::Elf;
 use goblin::elf::program_header::PT_LOAD;
 
 const MEM_SIZE: usize = 2 * 1024 * 1024 * 1024 * 1024;
-const PAGE_SIZE: usize = 2 * 1024 * 1024;
 const GUEST_BASE: GuestAddress = GuestAddress(0);
-const PML4_ADDR: GuestAddress = GuestAddress(0x1000);
-const PDPT_ADDR: GuestAddress = GuestAddress(0x2000);
-const PD_ADDR: GuestAddress = GuestAddress(0x3000);
-pub const DATA_ADDR: GuestAddress = GuestAddress(0x4000);
-const STACK_TOP: u64 = (PAGE_SIZE - 0x1000) as u64; // stack somewhere near the top
+const PML4_ADDR: GuestAddress = GuestAddress(KERNEL_PML4_OFFSET);
+const KERNEL_PML4_ADDR: GuestAddress = GuestAddress(PML4_ADDR.0 + KERNEL_PML4_IDX * 8);
+const PDPT_ADDR: GuestAddress = GuestAddress(KERNEL_PDPT_OFFSET);
+const PD_ADDR: GuestAddress = GuestAddress(KERNEL_PD_OFFSET);
 
 // Page-table / PTE flag bits
 const PTE_PRESENT: u64 = 0x1;
@@ -49,18 +50,13 @@ pub struct Vm {
 }
 
 fn init_x64(vm: &VmFd, vcpus: &[kvm_ioctls::VcpuFd], boot_mem: &GuestMemoryMmap<()>) -> Result<()> {
-    // Build minimal page tables: PML4 -> PDPT -> PD (2 MiB pages)
-    // PML4[0] points to PDPT, PDPT[0] points to PD, PD[0] maps the first 2MiB.
-    let pml4_entry: u64 = PDPT_ADDR.0 | PML4_ENTRY_FLAGS; // PML4[0] -> PDPT
+    let pml4_entry: u64 = PDPT_ADDR.0 | PML4_ENTRY_FLAGS; // PML4[KERNEL_PML4_IDX] -> PDPT
     let pdpt_entry: u64 = PD_ADDR.0 | PML4_ENTRY_FLAGS; // PDPT[0] -> PD
     let pd_entry: u64 = GUEST_BASE.0 | PD_2M_ENTRY_FLAGS; // PD[0] -> 2M pages
 
-    boot_mem.write_slice(&pml4_entry.to_le_bytes(), PML4_ADDR)?;
+    boot_mem.write_slice(&pml4_entry.to_le_bytes(), KERNEL_PML4_ADDR)?;
     boot_mem.write_slice(&pdpt_entry.to_le_bytes(), PDPT_ADDR)?;
     boot_mem.write_slice(&pd_entry.to_le_bytes(), PD_ADDR)?;
-
-    // Clear observable data area (guest will write a 64-bit value here)
-    boot_mem.write_slice(&0u64.to_le_bytes(), DATA_ADDR)?;
 
     // Register the guest memory region with KVM.
     unsafe {
@@ -78,7 +74,7 @@ fn init_x64(vm: &VmFd, vcpus: &[kvm_ioctls::VcpuFd], boot_mem: &GuestMemoryMmap<
     // - RSP: stack pointer inside guest memory
     // - RFLAGS: set the reserved bit required by x86
     let mut regs = vcpus[0].get_regs()?;
-    regs.rsp = STACK_TOP; // initial stack pointer
+    regs.rsp = KERNEL_STACK.0; // initial stack pointer 
     regs.rflags = RFLAGS_RESERVED; // required reserved bit
     vcpus[0].set_regs(&regs)?;
 
@@ -152,14 +148,15 @@ impl Vm {
                 continue;
             }
 
-            let guest_addr = GuestAddress(ph.p_paddr);
             let file_offset = ph.p_offset as usize;
             let filesz = ph.p_filesz as usize;
             let memsz = ph.p_memsz as usize;
 
             // copy the initialized data from the file
-            self.boot_mem
-                .write_slice(&data[file_offset..file_offset + filesz], guest_addr)?;
+            self.boot_mem.write_slice(
+                &data[file_offset..file_offset + filesz],
+                GuestAddress(ph.p_paddr),
+            )?;
 
             // zero the remainder of the segment if any
             if memsz > filesz {

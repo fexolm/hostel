@@ -4,18 +4,18 @@ const BITMAP_SIZE: usize = 8 * 1024; // can address up to 1tb of 2mb pages
 
 #[repr(align(4096))]
 #[repr(C)]
-pub struct PageAllocator {
+struct PageAllocator {
     bitmap: [u64; BITMAP_SIZE],
 }
 
 impl PageAllocator {
-    pub fn new() -> Self {
+    const fn new() -> Self {
         let mut bitmap = [0; BITMAP_SIZE];
         bitmap[0] = 1; // occupy first page
         Self { bitmap }
     }
 
-    pub fn alloc(&mut self) -> PhysicalAddr {
+    fn alloc(&mut self) -> PhysicalAddr {
         for (i, word) in self.bitmap.iter_mut().enumerate() {
             let free_bits = !*word;
 
@@ -31,12 +31,22 @@ impl PageAllocator {
         panic!("Out of memory");
     }
 
-    pub fn free(&mut self, addr: PhysicalAddr) {
+    fn free(&mut self, addr: PhysicalAddr) {
         let page_index = addr.0 / PAGE_SIZE;
         let word_index = page_index / 64;
         let bit_index = page_index % 64;
         self.bitmap[word_index as usize] &= !(1 << bit_index);
     }
+}
+
+static PAGE_ALLOCATOR: spin::Mutex<PageAllocator> = spin::Mutex::new(PageAllocator::new());
+
+pub fn palloc() -> PhysicalAddr {
+    PAGE_ALLOCATOR.lock().alloc()
+}
+
+pub fn pfree(addr: PhysicalAddr) {
+    PAGE_ALLOCATOR.lock().free(addr);
 }
 
 #[cfg(test)]

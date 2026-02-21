@@ -5,8 +5,13 @@ use kernel::Kernel;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let kernel = Kernel::new();
-    kernel.run()
+    loop {
+        unsafe {
+            core::arch::asm!("hlt");
+        }
+    }
+    // let kernel = Kernel::new();
+    // kernel.run()
 }
 
 #[cfg(not(test))]
