@@ -42,8 +42,8 @@ const CS_TYPE: u8 = 0xB;
 const SS_TYPE: u8 = 0x3;
 
 pub struct Vm {
-    kvm: Kvm,
-    vm: VmFd,
+    _kvm: Kvm,
+    _vm: VmFd,
     vcpus: Vec<kvm_ioctls::VcpuFd>,
     boot_mem: GuestMemoryMmap<()>,
 }
@@ -139,8 +139,8 @@ impl Vm {
         init_x64(&vm, &vcpus, &boot_mem)?;
 
         Ok(Self {
-            kvm,
-            vm,
+            _kvm: kvm,
+            _vm: vm,
             vcpus,
             boot_mem,
         })
@@ -205,10 +205,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn vm_loads_boot_elf_from_build_script() {
-        // the build script emits the path via the BOOT_ELF environment variable
-        let path = env!("BOOT_ELF_PATH");
-        let data = std::fs::read(path).expect("read boot elf");
+    fn vm_loads_kernel_elf_from_build_script() {
+        // the build script emits the path via the KERNEL_BIN environment variable
+        let path = env!("KERNEL_BIN");
+        let data = std::fs::read(path).expect("read kernel elf");
 
         let mut vm = Vm::new().expect("create vm");
         vm.load_elf(&data).expect("load elf");

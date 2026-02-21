@@ -4,7 +4,7 @@ use std::process::Command;
 
 fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let boot_dir = env::current_dir().unwrap().join("boot");
+    let kernel_dir = env::current_dir().unwrap().join("kernel");
 
     let status = Command::new("cargo")
         .env_remove("RUSTFLAGS")
@@ -15,19 +15,19 @@ fn main() {
             "--target",
             "x86_64-unknown-none",
             "--target-dir",
-            out_dir.join("boot-target").to_str().unwrap(),
+            out_dir.join("kernel-target").to_str().unwrap(),
         ])
-        .current_dir(&boot_dir)
+        .current_dir(&kernel_dir)
         .status()
-        .expect("Failed to run cargo build for boot");
+        .expect("Failed to run cargo build for kernel");
 
     if !status.success() {
-        panic!("compiling boot crate failed");
+        panic!("compiling kernel crate failed");
     }
 
-    let elf_path = out_dir.join("boot-target/x86_64-unknown-none/release/boot");
+    let elf_path = out_dir.join("kernel-target/x86_64-unknown-none/release/kernel");
 
-    println!("cargo:rustc-env=BOOT_ELF_PATH={}", elf_path.display());
+    println!("cargo:rustc-env=KERNEL_BIN={}", elf_path.display());
 
-    println!("cargo:rerun-if-changed=boot/src/main.rs");
+    println!("cargo:rerun-if-changed=kernel/src/main.rs");
 }

@@ -1,6 +1,3 @@
-#![no_std]
-#![no_main]
-
 /// Entry point executed by the guest VM. When running under KVM this function
 /// will be invoked <strong>after</strong> the loader has set up a 64-bit
 /// environment (paging/long mode).
