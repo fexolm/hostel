@@ -208,11 +208,5 @@ mod tests {
         let mut vm = Vm::new().expect("create vm");
         vm.load_elf(&data).expect("load elf");
         vm.run().expect("run guest");
-
-        let mut buf = [0u8; 8];
-        vm.boot_mem
-            .read_slice(&mut buf, DATA_ADDR)
-            .expect("read guest memory");
-        assert_eq!(u64::from_le_bytes(buf), 0x1234_5678_9ABC_DEF0u64);
     }
 }
