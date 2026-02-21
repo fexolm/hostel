@@ -48,16 +48,12 @@ pub struct Vm {
     boot_mem: GuestMemoryMmap<()>,
 }
 
-fn init_x64(
-    vm: &VmFd,
-    vcpus: &Vec<kvm_ioctls::VcpuFd>,
-    boot_mem: &GuestMemoryMmap<()>,
-) -> Result<()> {
+fn init_x64(vm: &VmFd, vcpus: &[kvm_ioctls::VcpuFd], boot_mem: &GuestMemoryMmap<()>) -> Result<()> {
     // Build minimal page tables: PML4 -> PDPT -> PD (2 MiB pages)
     // PML4[0] points to PDPT, PDPT[0] points to PD, PD[0] maps the first 2MiB.
-    let pml4_entry: u64 = (PDPT_ADDR.0 as u64) | PML4_ENTRY_FLAGS; // PML4[0] -> PDPT
-    let pdpt_entry: u64 = (PD_ADDR.0 as u64) | PML4_ENTRY_FLAGS; // PDPT[0] -> PD
-    let pd_entry: u64 = (GUEST_BASE.0 as u64) | PD_2M_ENTRY_FLAGS; // PD[0] -> 2M pages
+    let pml4_entry: u64 = PDPT_ADDR.0 | PML4_ENTRY_FLAGS; // PML4[0] -> PDPT
+    let pdpt_entry: u64 = PD_ADDR.0 | PML4_ENTRY_FLAGS; // PDPT[0] -> PD
+    let pd_entry: u64 = GUEST_BASE.0 | PD_2M_ENTRY_FLAGS; // PD[0] -> 2M pages
 
     boot_mem.write_slice(&pml4_entry.to_le_bytes(), PML4_ADDR)?;
     boot_mem.write_slice(&pdpt_entry.to_le_bytes(), PDPT_ADDR)?;
@@ -130,8 +126,7 @@ impl Vm {
     pub fn new() -> Result<Self> {
         let kvm = Kvm::new()?;
         let vm = kvm.create_vm()?;
-        let mut vcpus = Vec::new();
-        vcpus.push(vm.create_vcpu(0)?);
+        let vcpus = vec![vm.create_vcpu(0)?];
 
         let boot_mem: GuestMemoryMmap<()> =
             GuestMemoryMmap::from_ranges(&[(GUEST_BASE, MEM_SIZE)])?;
@@ -157,7 +152,7 @@ impl Vm {
                 continue;
             }
 
-            let guest_addr = GuestAddress(ph.p_paddr as u64);
+            let guest_addr = GuestAddress(ph.p_paddr);
             let file_offset = ph.p_offset as usize;
             let filesz = ph.p_filesz as usize;
             let memsz = ph.p_memsz as usize;
@@ -168,7 +163,7 @@ impl Vm {
 
             // zero the remainder of the segment if any
             if memsz > filesz {
-                let zero_addr = GuestAddress(ph.p_paddr as u64 + filesz as u64);
+                let zero_addr = GuestAddress(ph.p_paddr + filesz as u64);
                 let zero_buf = vec![0u8; memsz - filesz];
                 self.boot_mem.write_slice(&zero_buf, zero_addr)?;
             }
