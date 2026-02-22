@@ -55,7 +55,7 @@ fn main() {
     gen_linker_script(&linker_script_path);
 
     let rustflags = format!(
-        "-C link-arg=-T{} -C relocation-model=static",
+        "-C link-arg=-T{} -C relocation-model=static -C code-model=kernel",
         linker_script_path.display()
     );
 

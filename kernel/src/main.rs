@@ -1,10 +1,11 @@
 #![no_std]
 #![no_main]
 
-use kernel::Kernel;
+use kernel::{page_alloc::palloc, Kernel};
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    let _ = palloc();
     loop {
         unsafe {
             core::arch::asm!("hlt");

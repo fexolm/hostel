@@ -3,7 +3,8 @@ pub mod error;
 pub use self::error::{Error, Result};
 
 use kernel::constants::{
-    KERNEL_PD_OFFSET, KERNEL_PDPT_OFFSET, KERNEL_PML4_IDX, KERNEL_PML4_OFFSET, KERNEL_STACK,
+    KERNEL_PD_OFFSET, KERNEL_PDPT_INDEX, KERNEL_PDPT_OFFSET, KERNEL_PML4_IDX, KERNEL_PML4_OFFSET,
+    KERNEL_STACK,
 };
 use kvm_bindings::kvm_userspace_memory_region;
 use kvm_ioctls::{Kvm, VmFd};
@@ -16,8 +17,9 @@ use goblin::elf::program_header::PT_LOAD;
 const MEM_SIZE: usize = 2 * 1024 * 1024 * 1024 * 1024;
 const GUEST_BASE: GuestAddress = GuestAddress(0);
 const PML4_ADDR: GuestAddress = GuestAddress(KERNEL_PML4_OFFSET);
-const KERNEL_PML4_ADDR: GuestAddress = GuestAddress(PML4_ADDR.0 + KERNEL_PML4_IDX * 8);
+const KERNEL_PML4_ADDR: GuestAddress = GuestAddress(KERNEL_PML4_OFFSET + KERNEL_PML4_IDX * 8);
 const PDPT_ADDR: GuestAddress = GuestAddress(KERNEL_PDPT_OFFSET);
+const KERNEL_PDPT_ADDR: GuestAddress = GuestAddress(KERNEL_PDPT_OFFSET + KERNEL_PDPT_INDEX * 8);
 const PD_ADDR: GuestAddress = GuestAddress(KERNEL_PD_OFFSET);
 
 // Page-table / PTE flag bits
@@ -55,7 +57,7 @@ fn init_x64(vm: &VmFd, vcpus: &[kvm_ioctls::VcpuFd], boot_mem: &GuestMemoryMmap<
     let pd_entry: u64 = GUEST_BASE.0 | PD_2M_ENTRY_FLAGS; // PD[0] -> 2M pages
 
     boot_mem.write_slice(&pml4_entry.to_le_bytes(), KERNEL_PML4_ADDR)?;
-    boot_mem.write_slice(&pdpt_entry.to_le_bytes(), PDPT_ADDR)?;
+    boot_mem.write_slice(&pdpt_entry.to_le_bytes(), KERNEL_PDPT_ADDR)?;
     boot_mem.write_slice(&pd_entry.to_le_bytes(), PD_ADDR)?;
 
     // Register the guest memory region with KVM.

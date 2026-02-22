@@ -2,8 +2,9 @@ use crate::types::VirtualAddr;
 
 pub const PAGE_SIZE: u64 = 2 << 20;
 
-pub const KERNEL_BASE: VirtualAddr = VirtualAddr(0xFFFF_FF80_0000_0000);
+pub const KERNEL_BASE: VirtualAddr = VirtualAddr(0xFFFF_FFFF_8000_0000);
 pub const KERNEL_PML4_IDX: u64 = 511;
+pub const KERNEL_PDPT_INDEX: u64 = 510;
 
 pub const KERNEL_PML4_OFFSET: u64 = 0x0;
 pub const KERNEL_PDPT_OFFSET: u64 = KERNEL_PML4_OFFSET + 0x1000;
