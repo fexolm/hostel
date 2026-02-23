@@ -10,3 +10,7 @@ spin = "0.10.0"
 [profile.release]
 panic = "abort"
 lto = true
+
+[[bin]]
+name = "kernel"
+test = false

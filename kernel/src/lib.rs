@@ -1,10 +1,10 @@
 #![cfg_attr(not(test), no_std)]
 
+pub mod address;
 pub mod constants;
 pub mod page_alloc;
 pub mod pagetable;
 pub mod process;
-pub mod types;
 pub mod vmm;
 
 pub struct Kernel {

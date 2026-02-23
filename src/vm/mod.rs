@@ -3,8 +3,10 @@ pub mod error;
 pub use self::error::{Error, Result};
 
 use kernel::constants::{
-    KERNEL_PD_OFFSET, KERNEL_PDPT_INDEX, KERNEL_PDPT_OFFSET, KERNEL_PML4_IDX, KERNEL_PML4_OFFSET,
-    KERNEL_STACK,
+    DIRECT_MAP_PD, DIRECT_MAP_PD_COUNT, DIRECT_MAP_PDPT, DIRECT_MAP_PDPT_COUNT, DIRECT_MAP_PML4,
+    DIRECT_MAP_PML4_ENTRIES_COUNT, DIRECT_MAP_PML4_OFFSET, KERNEL_CODE_PD, KERNEL_CODE_PDPD,
+    KERNEL_CODE_PHYS, KERNEL_CODE_SIZE, KERNEL_CODE_VIRT, KERNEL_STACK, MAX_PHYSICAL_ADDR,
+    PAGE_SIZE, PAGE_TABLE_ENTRIES, PAGE_TABLE_SIZE,
 };
 use kvm_bindings::kvm_userspace_memory_region;
 use kvm_ioctls::{Kvm, VmFd};
@@ -14,20 +16,13 @@ use vm_memory::{Bytes, GuestAddress, GuestMemoryBackend, GuestMemoryMmap};
 use goblin::elf::Elf;
 use goblin::elf::program_header::PT_LOAD;
 
-const MEM_SIZE: usize = 2 * 1024 * 1024 * 1024 * 1024;
+const MEM_SIZE: usize = MAX_PHYSICAL_ADDR as usize + 1;
 const GUEST_BASE: GuestAddress = GuestAddress(0);
-const PML4_ADDR: GuestAddress = GuestAddress(KERNEL_PML4_OFFSET);
-const KERNEL_PML4_ADDR: GuestAddress = GuestAddress(KERNEL_PML4_OFFSET + KERNEL_PML4_IDX * 8);
-const PDPT_ADDR: GuestAddress = GuestAddress(KERNEL_PDPT_OFFSET);
-const KERNEL_PDPT_ADDR: GuestAddress = GuestAddress(KERNEL_PDPT_OFFSET + KERNEL_PDPT_INDEX * 8);
-const PD_ADDR: GuestAddress = GuestAddress(KERNEL_PD_OFFSET);
 
 // Page-table / PTE flag bits
 const PTE_PRESENT: u64 = 0x1;
 const PTE_RW: u64 = 0x2;
 const PTE_PS: u64 = 0x80;
-const PML4_ENTRY_FLAGS: u64 = PTE_PRESENT | PTE_RW; // present + read/write
-const PD_2M_ENTRY_FLAGS: u64 = PTE_PRESENT | PTE_RW | PTE_PS; // 2MB page entry
 
 // Control-register / system constants
 const CR4_PAE: u64 = 1 << 5;
@@ -52,13 +47,47 @@ pub struct Vm {
 }
 
 fn init_x64(vm: &VmFd, vcpus: &[kvm_ioctls::VcpuFd], boot_mem: &GuestMemoryMmap<()>) -> Result<()> {
-    let pml4_entry: u64 = PDPT_ADDR.0 | PML4_ENTRY_FLAGS; // PML4[KERNEL_PML4_IDX] -> PDPT
-    let pdpt_entry: u64 = PD_ADDR.0 | PML4_ENTRY_FLAGS; // PDPT[0] -> PD
-    let pd_entry: u64 = GUEST_BASE.0 | PD_2M_ENTRY_FLAGS; // PD[0] -> 2M pages
+    // map direct map region
+    for i in 0..DIRECT_MAP_PML4_ENTRIES_COUNT as usize {
+        let entry_val = (DIRECT_MAP_PDPT.0 + (i as u64) * PAGE_TABLE_SIZE) | PTE_PRESENT | PTE_RW;
+        let entry_addr =
+            GuestAddress(DIRECT_MAP_PML4.0 + (DIRECT_MAP_PML4_OFFSET + (i as u64) * 8));
+        boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
+    }
 
-    boot_mem.write_slice(&pml4_entry.to_le_bytes(), KERNEL_PML4_ADDR)?;
-    boot_mem.write_slice(&pdpt_entry.to_le_bytes(), KERNEL_PDPT_ADDR)?;
-    boot_mem.write_slice(&pd_entry.to_le_bytes(), PD_ADDR)?;
+    for i in 0..DIRECT_MAP_PDPT_COUNT * PAGE_TABLE_ENTRIES {
+        let i64 = i as u64;
+        let pd_phys = DIRECT_MAP_PD.0 + i64 * PAGE_TABLE_SIZE;
+        let entry_val = pd_phys | PTE_PRESENT | PTE_RW;
+        let entry_addr = GuestAddress(DIRECT_MAP_PDPT.0 + i64 * 8);
+        boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
+    }
+
+    for i in 0..DIRECT_MAP_PD_COUNT * PAGE_TABLE_ENTRIES {
+        let phys = i as u64 * PAGE_SIZE;
+        let entry_val = phys | PTE_PRESENT | PTE_RW | PTE_PS;
+        let entry_addr = GuestAddress(DIRECT_MAP_PD.0 + i as u64 * 8);
+        boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
+    }
+
+    // map kernel code region
+    let kernel_pml4_val = KERNEL_CODE_PDPD.0 | PTE_PRESENT | PTE_RW;
+    let kernel_pml4_addr = GuestAddress(DIRECT_MAP_PML4.0 + KERNEL_CODE_VIRT.pml4_index() * 8);
+    boot_mem.write_slice(&kernel_pml4_val.to_le_bytes(), kernel_pml4_addr)?;
+
+    for i in 0..2 {
+        let pd_phys = KERNEL_CODE_PD.0 + (i as u64 * PAGE_TABLE_SIZE);
+        let entry_val = pd_phys | PTE_PRESENT | PTE_RW;
+        let entry_addr = GuestAddress(KERNEL_CODE_PDPD.0 + (KERNEL_CODE_VIRT.pdpt_index() + i) * 8);
+        boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
+    }
+
+    for i in 0..PAGE_TABLE_ENTRIES {
+        let phys = KERNEL_CODE_PHYS.add(i * PAGE_SIZE).0;
+        let entry_val = phys | PTE_PRESENT | PTE_RW | PTE_PS;
+        let entry_addr = GuestAddress(KERNEL_CODE_PD.0 + i * 8);
+        boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
+    }
 
     // Register the guest memory region with KVM.
     unsafe {
@@ -76,13 +105,13 @@ fn init_x64(vm: &VmFd, vcpus: &[kvm_ioctls::VcpuFd], boot_mem: &GuestMemoryMmap<
     // - RSP: stack pointer inside guest memory
     // - RFLAGS: set the reserved bit required by x86
     let mut regs = vcpus[0].get_regs()?;
-    regs.rsp = KERNEL_STACK.0; // initial stack pointer 
+    regs.rsp = KERNEL_STACK.to_virtual().unwrap().0; // initial stack pointer 
     regs.rflags = RFLAGS_RESERVED; // required reserved bit
     vcpus[0].set_regs(&regs)?;
 
     // Special registers (control & segment registers) for entering long mode.
     let mut sregs = vcpus[0].get_sregs()?;
-    sregs.cr3 = PML4_ADDR.0; // CR3 = physical address of the PML4 (page-table root)
+    sregs.cr3 = DIRECT_MAP_PML4.0; // CR3 = physical address of the PML4 (page-table root)
 
     // CR4.PAE must be set to enable physical-address-extension paging required
     // by 64-bit mode page tables.
@@ -153,6 +182,15 @@ impl Vm {
             let file_offset = ph.p_offset as usize;
             let filesz = ph.p_filesz as usize;
             let memsz = ph.p_memsz as usize;
+
+            if ph.p_vaddr < KERNEL_CODE_VIRT.0
+                || ph.p_vaddr + memsz as u64 > KERNEL_CODE_VIRT.0 + KERNEL_CODE_SIZE as u64
+            {
+                return Err(Error::Parsing(goblin::error::Error::Malformed(format!(
+                    "Program header with p_vaddr {:#x} and memsz {:#x} is out of bounds",
+                    ph.p_vaddr, memsz
+                ))));
+            }
 
             // copy the initialized data from the file
             self.boot_mem.write_slice(

@@ -1,4 +1,4 @@
-use crate::{constants::PAGE_SIZE, types::PhysicalAddr};
+use crate::{constants::PAGE_SIZE, address::PhysicalAddr};
 
 const BITMAP_SIZE: usize = 8 * 1024; // can address up to 1tb of 2mb pages
 

@@ -39,8 +39,8 @@ fn gen_linker_script(linker_script_path: &PathBuf) {
             }} > virt :data
         }}
         "#,
-        virt = kernel::constants::KERNEL_CODE.0,
-        phys = kernel::constants::KERNEL_CODE_OFFSET,
+        virt = kernel::constants::KERNEL_CODE_VIRT.0,
+        phys = kernel::constants::KERNEL_CODE_PHYS.0,
     );
 
     let mut f = File::create(linker_script_path).unwrap();

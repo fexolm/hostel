@@ -1,5 +1,3 @@
 use crate::pagetable::PageTable;
 
-pub struct Process {
-    pub pagetable: PageTable,
-}
+pub struct Process {}

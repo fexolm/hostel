@@ -1,8 +1,8 @@
 #![allow(unused)]
 use crate::{
+    address::PhysicalAddr,
     constants::PAGE_SIZE,
     page_alloc::{palloc, pfree},
-    types::PhysicalAddr,
 };
 
 const PRESENT: u64 = 1 << 0;
@@ -129,6 +129,8 @@ impl PageTableAlloc {
 
 #[cfg(test)]
 mod tests {
+    use crate::Kernel;
+
     use super::*;
     use std::mem::zeroed;
 
