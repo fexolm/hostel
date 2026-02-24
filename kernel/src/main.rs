@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use kernel::{page_alloc::palloc, Kernel};
+use kernel::{palloc::palloc, Kernel};
 
 #[cfg(not(test))]
 #[no_mangle]

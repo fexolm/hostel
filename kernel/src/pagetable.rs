@@ -2,7 +2,7 @@
 use crate::{
     address::PhysicalAddr,
     constants::PAGE_SIZE,
-    page_alloc::{palloc, pfree},
+    palloc::{palloc, pfree},
 };
 
 const PRESENT: u64 = 1 << 0;
@@ -21,19 +21,19 @@ pub struct PageTableEntry(u64);
 
 impl PageTableEntry {
     pub fn set_table(&mut self, addr: PhysicalAddr) {
-        self.0 = addr.0 | PRESENT | WRITABLE | USER_ACCESSIBLE;
+        self.0 = addr.as_u64() | PRESENT | WRITABLE | USER_ACCESSIBLE;
     }
 
-    pub fn set_page(&mut self, addr: PhysicalAddr) {
-        self.0 = addr.0 | PRESENT | WRITABLE | USER_ACCESSIBLE | HUGE_PAGE;
+    pub fn set_paddr(&mut self, addr: PhysicalAddr) {
+        self.0 = addr.as_u64() | PRESENT | WRITABLE | USER_ACCESSIBLE | HUGE_PAGE;
     }
 
     pub fn is_present(&self) -> bool {
         (self.0 & PRESENT) != 0
     }
 
-    pub fn addr(&self) -> u64 {
-        self.0 & 0x000F_FFFF_FFFF_F000
+    pub fn addr(&self) -> PhysicalAddr {
+        PhysicalAddr::new(self.0 & 0x000F_FFFF_FFFF_F000)
     }
 }
 
@@ -87,7 +87,7 @@ pub struct PageTableAlloc {
 impl PageTableAlloc {
     pub fn new() -> Self {
         Self {
-            pages: [PhysicalAddr(0); 64],
+            pages: [PhysicalAddr::new(0); 64],
             bitmap: [PageTableBitmap::new(); 64],
             count: 0,
         }
@@ -96,7 +96,9 @@ impl PageTableAlloc {
     pub fn alloc(&mut self) -> Option<u64> {
         for i in 0..self.count {
             if let Some(index) = self.bitmap[i].alloc() {
-                return Some(self.pages[i].0 + (index as u64 * size_of::<PageTable>() as u64));
+                return Some(
+                    self.pages[i].as_u64() + (index as u64 * size_of::<PageTable>() as u64),
+                );
             }
         }
         if self.count < self.pages.len() {
@@ -110,8 +112,9 @@ impl PageTableAlloc {
 
     pub fn free(&mut self, addr: u64) {
         for i in 0..self.count {
-            if addr >= self.pages[i].0 && addr < self.pages[i].0 + PAGE_SIZE {
-                let index = ((addr - self.pages[i].0) / size_of::<PageTable>() as u64) as usize;
+            if addr >= self.pages[i].as_u64() && addr < self.pages[i].as_u64() + PAGE_SIZE {
+                let index =
+                    ((addr - self.pages[i].as_u64()) / size_of::<PageTable>() as u64) as usize;
                 self.bitmap[i].free(index);
                 if self.bitmap[i].bitmap.iter().all(|&b| b == 0) {
                     pfree(self.pages[i]);
@@ -180,7 +183,7 @@ mod tests {
         let mut alloc = PageTableAlloc::new();
 
         // pretend we already have one page and don't touch the kernel
-        alloc.pages[0] = PhysicalAddr(0x1000);
+        alloc.pages[0] = PhysicalAddr::new(0x1000);
         alloc.count = 1;
 
         let addr1 = alloc.alloc().unwrap();

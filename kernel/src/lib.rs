@@ -2,8 +2,9 @@
 
 pub mod address;
 pub mod constants;
-pub mod page_alloc;
+pub mod error;
 pub mod pagetable;
+pub mod palloc;
 pub mod process;
 pub mod vmm;
 

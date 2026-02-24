@@ -49,43 +49,46 @@ pub struct Vm {
 fn init_x64(vm: &VmFd, vcpus: &[kvm_ioctls::VcpuFd], boot_mem: &GuestMemoryMmap<()>) -> Result<()> {
     // map direct map region
     for i in 0..DIRECT_MAP_PML4_ENTRIES_COUNT as usize {
-        let entry_val = (DIRECT_MAP_PDPT.0 + (i as u64) * PAGE_TABLE_SIZE) | PTE_PRESENT | PTE_RW;
+        let entry_val =
+            (DIRECT_MAP_PDPT.as_u64() + (i as u64) * PAGE_TABLE_SIZE) | PTE_PRESENT | PTE_RW;
         let entry_addr =
-            GuestAddress(DIRECT_MAP_PML4.0 + (DIRECT_MAP_PML4_OFFSET + (i as u64) * 8));
+            GuestAddress(DIRECT_MAP_PML4.as_u64() + (DIRECT_MAP_PML4_OFFSET + (i as u64) * 8));
         boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
     }
 
     for i in 0..DIRECT_MAP_PDPT_COUNT * PAGE_TABLE_ENTRIES {
         let i64 = i as u64;
-        let pd_phys = DIRECT_MAP_PD.0 + i64 * PAGE_TABLE_SIZE;
+        let pd_phys = DIRECT_MAP_PD.as_u64() + i64 * PAGE_TABLE_SIZE;
         let entry_val = pd_phys | PTE_PRESENT | PTE_RW;
-        let entry_addr = GuestAddress(DIRECT_MAP_PDPT.0 + i64 * 8);
+        let entry_addr = GuestAddress(DIRECT_MAP_PDPT.as_u64() + i64 * 8);
         boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
     }
 
     for i in 0..DIRECT_MAP_PD_COUNT * PAGE_TABLE_ENTRIES {
         let phys = i as u64 * PAGE_SIZE;
         let entry_val = phys | PTE_PRESENT | PTE_RW | PTE_PS;
-        let entry_addr = GuestAddress(DIRECT_MAP_PD.0 + i as u64 * 8);
+        let entry_addr = GuestAddress(DIRECT_MAP_PD.as_u64() + i as u64 * 8);
         boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
     }
 
     // map kernel code region
-    let kernel_pml4_val = KERNEL_CODE_PDPD.0 | PTE_PRESENT | PTE_RW;
-    let kernel_pml4_addr = GuestAddress(DIRECT_MAP_PML4.0 + KERNEL_CODE_VIRT.pml4_index() * 8);
+    let kernel_pml4_val = KERNEL_CODE_PDPD.as_u64() | PTE_PRESENT | PTE_RW;
+    let kernel_pml4_addr =
+        GuestAddress(DIRECT_MAP_PML4.as_u64() + KERNEL_CODE_VIRT.pml4_index() * 8);
     boot_mem.write_slice(&kernel_pml4_val.to_le_bytes(), kernel_pml4_addr)?;
 
     for i in 0..2 {
-        let pd_phys = KERNEL_CODE_PD.0 + (i as u64 * PAGE_TABLE_SIZE);
+        let pd_phys = KERNEL_CODE_PD.as_u64() + (i as u64 * PAGE_TABLE_SIZE);
         let entry_val = pd_phys | PTE_PRESENT | PTE_RW;
-        let entry_addr = GuestAddress(KERNEL_CODE_PDPD.0 + (KERNEL_CODE_VIRT.pdpt_index() + i) * 8);
+        let entry_addr =
+            GuestAddress(KERNEL_CODE_PDPD.as_u64() + (KERNEL_CODE_VIRT.pdpt_index() + i) * 8);
         boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
     }
 
     for i in 0..PAGE_TABLE_ENTRIES {
-        let phys = KERNEL_CODE_PHYS.add(i * PAGE_SIZE).0;
+        let phys = KERNEL_CODE_PHYS.add(i * PAGE_SIZE).as_u64();
         let entry_val = phys | PTE_PRESENT | PTE_RW | PTE_PS;
-        let entry_addr = GuestAddress(KERNEL_CODE_PD.0 + i * 8);
+        let entry_addr = GuestAddress(KERNEL_CODE_PD.as_u64() + i * 8);
         boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
     }
 
@@ -105,13 +108,13 @@ fn init_x64(vm: &VmFd, vcpus: &[kvm_ioctls::VcpuFd], boot_mem: &GuestMemoryMmap<
     // - RSP: stack pointer inside guest memory
     // - RFLAGS: set the reserved bit required by x86
     let mut regs = vcpus[0].get_regs()?;
-    regs.rsp = KERNEL_STACK.to_virtual().unwrap().0; // initial stack pointer 
+    regs.rsp = KERNEL_STACK.to_virtual().unwrap().as_u64(); // initial stack pointer 
     regs.rflags = RFLAGS_RESERVED; // required reserved bit
     vcpus[0].set_regs(&regs)?;
 
     // Special registers (control & segment registers) for entering long mode.
     let mut sregs = vcpus[0].get_sregs()?;
-    sregs.cr3 = DIRECT_MAP_PML4.0; // CR3 = physical address of the PML4 (page-table root)
+    sregs.cr3 = DIRECT_MAP_PML4.as_u64(); // CR3 = physical address of the PML4 (page-table root)
 
     // CR4.PAE must be set to enable physical-address-extension paging required
     // by 64-bit mode page tables.
@@ -183,8 +186,8 @@ impl Vm {
             let filesz = ph.p_filesz as usize;
             let memsz = ph.p_memsz as usize;
 
-            if ph.p_vaddr < KERNEL_CODE_VIRT.0
-                || ph.p_vaddr + memsz as u64 > KERNEL_CODE_VIRT.0 + KERNEL_CODE_SIZE as u64
+            if ph.p_vaddr < KERNEL_CODE_VIRT.as_u64()
+                || ph.p_vaddr + memsz as u64 > KERNEL_CODE_VIRT.as_u64() + KERNEL_CODE_SIZE as u64
             {
                 return Err(Error::Parsing(goblin::error::Error::Malformed(format!(
                     "Program header with p_vaddr {:#x} and memsz {:#x} is out of bounds",
