@@ -1,15 +1,6 @@
 use core::fmt::Display;
 
-use thiserror::Error as ThisError;
-
-#[derive(ThisError, Debug)]
-pub enum AddressError {
-    #[error("failed to convert address {0} to physical")]
-    VAddrConvertionFailed(VirtualAddr),
-
-    #[error("failed to convert address {0} to virtual")]
-    PAddrConvertionFailed(PhysicalAddr),
-}
+use crate::memory::errors::{MemoryError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PhysicalAddr(u64);
@@ -32,9 +23,9 @@ impl PhysicalAddr {
         PhysicalAddr((self.0 + align - 1) & !(align - 1))
     }
 
-    pub const fn to_virtual(self) -> Result<VirtualAddr, AddressError> {
+    pub const fn to_virtual(self) -> Result<VirtualAddr> {
         if self.0 > crate::memory::constants::MAX_PHYSICAL_ADDR {
-            Err(AddressError::PAddrConvertionFailed(self))
+            Err(MemoryError::PhysicalToVirtual { addr: self.0 })
         } else {
             Ok(VirtualAddr(
                 self.0 + crate::memory::constants::DIRECT_MAP_OFFSET.0,
@@ -65,13 +56,13 @@ impl VirtualAddr {
         VirtualAddr(self.0 + offset)
     }
 
-    pub const fn to_physical(self) -> Result<PhysicalAddr, AddressError> {
+    pub const fn to_physical(self) -> Result<PhysicalAddr> {
         if self.0 < crate::memory::constants::DIRECT_MAP_OFFSET.0
             || self.0
                 > crate::memory::constants::DIRECT_MAP_OFFSET.0
                     + crate::memory::constants::MAX_PHYSICAL_ADDR
         {
-            Err(AddressError::VAddrConvertionFailed(self))
+            Err(MemoryError::VirtualToPhysical { addr: self.0 })
         } else {
             Ok(PhysicalAddr(
                 self.0 - crate::memory::constants::DIRECT_MAP_OFFSET.0,
@@ -97,7 +88,7 @@ impl VirtualAddr {
 
     pub unsafe fn as_ref_mut<'i, T>(self) -> &'i mut T {
         debug_assert!(self.0 as usize % core::mem::align_of::<T>() == 0);
-        &mut *self.as_ptr()
+        unsafe { &mut *self.as_ptr() }
     }
 }
 

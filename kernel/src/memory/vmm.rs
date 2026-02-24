@@ -1,5 +1,6 @@
 use crate::memory::{
-    address::{AddressError, PhysicalAddr, VirtualAddr},
+    address::{PhysicalAddr, VirtualAddr},
+    errors::{MemoryError, Result},
     pagetable::PageTable,
 };
 
@@ -14,12 +15,14 @@ impl Vmm {
         &mut self,
         paddr: PhysicalAddr,
         vaddr: VirtualAddr,
-    ) -> Result<(), AddressError> {
+    ) -> Result<()> {
         // todo ensure safety guarantees
         let pml4 = PageTable::current_pml4_mut()?;
         let pde = pml4.get(vaddr)?;
         if pde.is_present() {
-            todo!(); // error
+            return Err(MemoryError::AlreadyMapped {
+                addr: vaddr.as_u64(),
+            });
         }
         pde.set_paddr(paddr);
 

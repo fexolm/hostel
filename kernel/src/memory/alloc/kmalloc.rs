@@ -2,6 +2,7 @@ use crate::memory::{
     address::{PhysicalAddr, VirtualAddr},
     alloc::palloc::{palloc, pfree},
     constants::{DIRECT_MAP_OFFSET, PAGE_SIZE},
+    errors::{MemoryError, Result},
 };
 
 const MIN_SHIFT: u32 = 10; // 1 KiB
@@ -81,8 +82,8 @@ impl KmallocAllocator {
         }
     }
 
-    fn alloc(&mut self, size: usize) -> VirtualAddr {
-        let class_size = size_to_class(size) as u64;
+    fn alloc(&mut self, size: usize) -> Result<VirtualAddr> {
+        let class_size = size_to_class(size)? as u64;
 
         if class_size <= PAGE_SIZE {
             self.alloc_small(class_size as u32)
@@ -91,19 +92,19 @@ impl KmallocAllocator {
         }
     }
 
-    fn free(&mut self, ptr: VirtualAddr) {
+    fn free(&mut self, ptr: VirtualAddr) -> Result<()> {
         let phys = ptr
             .to_physical()
-            .expect("kfree expects pointer from direct map");
+            .map_err(|_| MemoryError::PointerNotInDirectMap { addr: ptr.as_u64() })?;
 
-        if self.free_small(phys) {
-            return;
+        if self.free_small(phys)? {
+            return Ok(());
         }
 
-        self.free_large(phys);
+        self.free_large(phys)
     }
 
-    fn alloc_small(&mut self, block_size: u32) -> VirtualAddr {
+    fn alloc_small(&mut self, block_size: u32) -> Result<VirtualAddr> {
         let class_idx = (block_size.trailing_zeros() - MIN_SHIFT) as usize;
         let class = &mut self.small[class_idx];
 
@@ -115,15 +116,17 @@ impl KmallocAllocator {
 
         for slab in &mut class.slabs {
             if !slab.in_use {
-                init_small_slab(slab, class.block_size);
+                init_small_slab(slab, class.block_size)?;
                 return alloc_from_small_slab(slab);
             }
         }
 
-        panic!("kmalloc: too many slabs for class {}", class.block_size);
+        Err(MemoryError::TooManySlabs {
+            class_size: class.block_size,
+        })
     }
 
-    fn free_small(&mut self, addr: PhysicalAddr) -> bool {
+    fn free_small(&mut self, addr: PhysicalAddr) -> Result<bool> {
         let p = addr.as_u64();
 
         for class in &mut self.small {
@@ -140,10 +143,12 @@ impl KmallocAllocator {
 
                 let block_size = slab.block_size as u64;
                 let offset = p - start;
-                assert!(
-                    offset % block_size == 0,
-                    "kfree: pointer does not match slab alignment"
-                );
+                if offset % block_size != 0 {
+                    return Err(MemoryError::SlabAlignmentMismatch {
+                        addr: p,
+                        block_size,
+                    });
+                }
 
                 let idx = (offset / block_size) as u32;
                 unsafe {
@@ -155,19 +160,19 @@ impl KmallocAllocator {
                 if slab.free_count == slab.capacity {
                     let base = slab.base;
                     *slab = SmallSlab::empty();
-                    pfree(base, 1);
+                    pfree(base, 1)?;
                 }
 
-                return true;
+                return Ok(true);
             }
         }
 
-        false
+        Ok(false)
     }
 
-    fn alloc_large(&mut self, class_size: u64) -> VirtualAddr {
+    fn alloc_large(&mut self, class_size: u64) -> Result<VirtualAddr> {
         let pages = class_size / PAGE_SIZE;
-        let base = palloc(pages);
+        let base = palloc(pages)?;
 
         for slot in &mut self.large {
             if !slot.in_use {
@@ -176,24 +181,24 @@ impl KmallocAllocator {
                     base,
                     pages,
                 };
-                return base.to_virtual().expect("valid direct map conversion");
+                return base.to_virtual();
             }
         }
 
-        pfree(base, pages);
-        panic!("kmalloc: too many active large allocations");
+        pfree(base, pages)?;
+        Err(MemoryError::TooManyLargeAllocations)
     }
 
-    fn free_large(&mut self, addr: PhysicalAddr) {
+    fn free_large(&mut self, addr: PhysicalAddr) -> Result<()> {
         for slot in &mut self.large {
             if slot.in_use && slot.base == addr {
-                pfree(slot.base, slot.pages);
+                pfree(slot.base, slot.pages)?;
                 *slot = LargeAlloc::empty();
-                return;
+                return Ok(());
             }
         }
 
-        panic!("kfree: unknown allocation {}", addr);
+        Err(MemoryError::UnknownAllocation { addr: addr.as_u64() })
     }
 }
 
@@ -207,24 +212,28 @@ const fn build_small_classes() -> [SmallClass; SMALL_CLASS_COUNT] {
     classes
 }
 
-fn size_to_class(size: usize) -> usize {
+fn size_to_class(size: usize) -> Result<usize> {
     let requested = if size == 0 { MIN_ALLOC_SIZE } else { size };
-    assert!(
-        requested <= MAX_ALLOC_SIZE,
-        "kmalloc supports up to 16 MiB allocations"
-    );
+    if requested > MAX_ALLOC_SIZE {
+        return Err(MemoryError::AllocationTooLarge {
+            requested,
+            max: MAX_ALLOC_SIZE,
+        });
+    }
 
     let mut class_size = MIN_ALLOC_SIZE;
     while class_size < requested {
         class_size <<= 1;
     }
-    class_size
+    Ok(class_size)
 }
 
-fn init_small_slab(slab: &mut SmallSlab, block_size: u32) {
-    let base = palloc(1);
+fn init_small_slab(slab: &mut SmallSlab, block_size: u32) -> Result<()> {
+    let base = palloc(1)?;
     let capacity = (PAGE_SIZE as u32) / block_size;
-    assert!(capacity > 0, "invalid slab capacity");
+    if capacity == 0 {
+        return Err(MemoryError::InvalidSlabCapacity);
+    }
 
     *slab = SmallSlab {
         in_use: true,
@@ -247,21 +256,22 @@ fn init_small_slab(slab: &mut SmallSlab, block_size: u32) {
         }
         i += 1;
     }
+
+    Ok(())
 }
 
-fn alloc_from_small_slab(slab: &mut SmallSlab) -> VirtualAddr {
+fn alloc_from_small_slab(slab: &mut SmallSlab) -> Result<VirtualAddr> {
     let idx = slab.free_head;
-    assert!(idx != FREE_LIST_END, "slab is empty");
+    if idx == FREE_LIST_END {
+        return Err(MemoryError::SlabEmpty);
+    }
 
     let next = unsafe { *small_slab_link_ptr(slab, idx) };
     slab.free_head = next;
     slab.free_count -= 1;
 
     let offset = idx as u64 * slab.block_size as u64;
-    slab.base
-        .add(offset)
-        .to_virtual()
-        .expect("invalid direct map conversion")
+    slab.base.add(offset).to_virtual()
 }
 
 unsafe fn small_slab_link_ptr(slab: &SmallSlab, idx: u32) -> *mut u32 {
@@ -271,12 +281,12 @@ unsafe fn small_slab_link_ptr(slab: &SmallSlab, idx: u32) -> *mut u32 {
 
 static KMALLOC: spin::Mutex<KmallocAllocator> = spin::Mutex::new(KmallocAllocator::new());
 
-pub fn kmalloc(size: usize) -> VirtualAddr {
+pub fn kmalloc(size: usize) -> Result<VirtualAddr> {
     KMALLOC.lock().alloc(size)
 }
 
-pub fn kfree(ptr: VirtualAddr) {
-    KMALLOC.lock().free(ptr);
+pub fn kfree(ptr: VirtualAddr) -> Result<()> {
+    KMALLOC.lock().free(ptr)
 }
 
 #[cfg(test)]
@@ -287,10 +297,10 @@ mod tests {
     #[test]
     fn class_rounding_works() {
         let _guard = ALLOC_TEST_LOCK.lock();
-        assert_eq!(size_to_class(0), 1024);
-        assert_eq!(size_to_class(1024), 1024);
-        assert_eq!(size_to_class(1025), 2048);
-        assert_eq!(size_to_class((1 << 22) + 1), 1 << 23);
+        assert_eq!(size_to_class(0).unwrap(), 1024);
+        assert_eq!(size_to_class(1024).unwrap(), 1024);
+        assert_eq!(size_to_class(1025).unwrap(), 2048);
+        assert_eq!(size_to_class((1 << 22) + 1).unwrap(), 1 << 23);
     }
 
     #[test]
@@ -298,19 +308,21 @@ mod tests {
         let _guard = ALLOC_TEST_LOCK.lock();
         for shift in MIN_SHIFT..=MAX_SHIFT {
             let class = 1usize << shift;
-            assert_eq!(size_to_class(class - 1), class);
-            assert_eq!(size_to_class(class), class);
+            assert_eq!(size_to_class(class - 1).unwrap(), class);
+            assert_eq!(size_to_class(class).unwrap(), class);
             if shift < MAX_SHIFT {
-                assert_eq!(size_to_class(class + 1), class << 1);
+                assert_eq!(size_to_class(class + 1).unwrap(), class << 1);
             }
         }
     }
 
     #[test]
-    #[should_panic(expected = "kmalloc supports up to 16 MiB allocations")]
-    fn class_rounding_panics_above_limit() {
+    fn class_rounding_errors_above_limit() {
         let _guard = ALLOC_TEST_LOCK.lock();
-        let _ = size_to_class(MAX_ALLOC_SIZE + 1);
+        assert!(matches!(
+            size_to_class(MAX_ALLOC_SIZE + 1),
+            Err(MemoryError::AllocationTooLarge { .. })
+        ));
     }
 
     #[test]
@@ -318,26 +330,26 @@ mod tests {
         let _guard = ALLOC_TEST_LOCK.lock();
         let mut alloc = KmallocAllocator::new();
 
-        let a = alloc.alloc((1 << 22) + 1); // rounds to 8 MiB
-        let b = alloc.alloc(1 << 22); // 4 MiB
+        let a = alloc.alloc((1 << 22) + 1).unwrap(); // rounds to 8 MiB
+        let b = alloc.alloc(1 << 22).unwrap(); // 4 MiB
 
         assert_eq!(
             a.to_physical()
-                .expect("kmalloc should return direct-map addresses")
+                .unwrap()
                 .as_u64()
                 % PAGE_SIZE,
             0
         );
         assert_eq!(
             b.to_physical()
-                .expect("kmalloc should return direct-map addresses")
+                .unwrap()
                 .as_u64()
                 % PAGE_SIZE,
             0
         );
 
-        alloc.free(a);
-        let c = alloc.alloc(1 << 23);
+        alloc.free(a).unwrap();
+        let c = alloc.alloc(1 << 23).unwrap();
         assert_eq!(c.as_u64(), a.as_u64());
     }
 
@@ -346,16 +358,16 @@ mod tests {
         let _guard = ALLOC_TEST_LOCK.lock();
         let mut alloc = KmallocAllocator::new();
 
-        let a = alloc.alloc(1 << 22); // 4 MiB
-        let b = alloc.alloc(1 << 22); // 4 MiB
+        let a = alloc.alloc(1 << 22).unwrap(); // 4 MiB
+        let b = alloc.alloc(1 << 22).unwrap(); // 4 MiB
 
         let a_phys = a
             .to_physical()
-            .expect("kmalloc should return direct-map addresses")
+            .unwrap()
             .as_u64();
         let b_phys = b
             .to_physical()
-            .expect("kmalloc should return direct-map addresses")
+            .unwrap()
             .as_u64();
 
         assert_ne!(a_phys, b_phys);
@@ -368,12 +380,12 @@ mod tests {
         let _guard = ALLOC_TEST_LOCK.lock();
         let mut alloc = KmallocAllocator::new();
 
-        let a = alloc.alloc(1 << 24); // 16 MiB
-        let b = alloc.alloc(1 << 24); // 16 MiB
+        let a = alloc.alloc(1 << 24).unwrap(); // 16 MiB
+        let b = alloc.alloc(1 << 24).unwrap(); // 16 MiB
         assert_ne!(a.as_u64(), b.as_u64());
 
-        alloc.free(b);
-        let c = alloc.alloc(1 << 24);
+        alloc.free(b).unwrap();
+        let c = alloc.alloc(1 << 24).unwrap();
         assert_eq!(c.as_u64(), b.as_u64());
     }
 }

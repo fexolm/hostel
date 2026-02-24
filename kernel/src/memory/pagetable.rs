@@ -3,9 +3,10 @@ use core::ptr::copy_nonoverlapping;
 use core::ptr::write_bytes;
 
 use crate::memory::{
-    address::{AddressError, PhysicalAddr, VirtualAddr},
+    address::{PhysicalAddr, VirtualAddr},
     alloc::kmalloc::{kfree, kmalloc},
     constants::{DIRECT_MAP_OFFSET, DIRECT_MAP_PML4, PAGE_TABLE_ENTRIES, PAGE_TABLE_SIZE},
+    errors::{MemoryError, Result},
 };
 
 const PRESENT: u64 = 1 << 0;
@@ -59,21 +60,21 @@ pub struct PageTable {
 }
 
 impl PageTable {
-    pub fn current_pml4_mut() -> Result<&'static mut Self, AddressError> {
+    pub fn current_pml4_mut() -> Result<&'static mut Self> {
         Self::from_paddr_mut(read_cr3())
     }
 
-    pub fn from_paddr(paddr: PhysicalAddr) -> Result<&'static Self, AddressError> {
+    pub fn from_paddr(paddr: PhysicalAddr) -> Result<&'static Self> {
         let vaddr = paddr.to_virtual()?;
         Ok(unsafe { &*vaddr.as_ptr::<Self>() })
     }
 
-    pub fn from_paddr_mut(paddr: PhysicalAddr) -> Result<&'static mut Self, AddressError> {
+    pub fn from_paddr_mut(paddr: PhysicalAddr) -> Result<&'static mut Self> {
         Ok(unsafe { paddr.to_virtual()?.as_ref_mut::<Self>() })
     }
 
-    pub fn alloc_user_pml4() -> Result<PhysicalAddr, AddressError> {
-        let paddr = alloc_zeroed_table();
+    pub fn alloc_user_pml4() -> Result<PhysicalAddr> {
+        let paddr = alloc_zeroed_table()?;
         let pml4 = Self::from_paddr_mut(paddr)?;
         let kernel = Self::from_paddr_mut(DIRECT_MAP_PML4)?;
 
@@ -88,7 +89,7 @@ impl PageTable {
         Ok(paddr)
     }
 
-    pub fn get(&mut self, vaddr: VirtualAddr) -> Result<&mut PageTableEntry, AddressError> {
+    pub fn get(&mut self, vaddr: VirtualAddr) -> Result<&mut PageTableEntry> {
         self.get_level(vaddr, PageTableLevel::Pml4)
     }
 
@@ -96,26 +97,30 @@ impl PageTable {
         &mut self,
         vaddr: VirtualAddr,
         level: PageTableLevel,
-    ) -> Result<&mut PageTableEntry, AddressError> {
+    ) -> Result<&mut PageTableEntry> {
         if level == PageTableLevel::Pd {
             return Ok(&mut self.entries[index_for(level, vaddr)]);
         }
 
         let entry = &mut self.entries[index_for(level, vaddr)];
         if !entry.is_present() {
-            entry.set_table(alloc_zeroed_table());
+            entry.set_table(alloc_zeroed_table()?);
         }
 
-        let next = level.next().expect("next level must exist");
+        let Some(next) = level.next() else {
+            return Err(MemoryError::VirtualToPhysical {
+                addr: vaddr.as_u64(),
+            });
+        };
         let child = Self::from_paddr_mut(entry.addr())?;
         child.get_level(vaddr, next)
     }
 
-    pub fn free(&mut self) {
+    pub fn free(&mut self) -> Result<()> {
         self.free_level(PageTableLevel::Pml4)
     }
 
-    fn free_level(&mut self, level: PageTableLevel) {
+    fn free_level(&mut self, level: PageTableLevel) -> Result<()> {
         let end = if level == PageTableLevel::Pml4 {
             USER_PML4_LIMIT
         } else {
@@ -126,14 +131,14 @@ impl PageTable {
             for i in 0..end {
                 let entry = self.entries[i];
                 if entry.is_present() {
-                    let child =
-                        Self::from_paddr_mut(entry.addr()).expect("child page table must be valid");
-                    child.free_level(next);
+                    let child = Self::from_paddr_mut(entry.addr())?;
+                    child.free_level(next)?;
                 }
             }
         }
 
-        kfree(self.self_vaddr());
+        kfree(self.self_vaddr())?;
+        Ok(())
     }
 
     fn self_vaddr(&self) -> VirtualAddr {
@@ -141,14 +146,14 @@ impl PageTable {
     }
 }
 
-fn alloc_zeroed_table() -> PhysicalAddr {
-    let vaddr = kmalloc(PAGE_TABLE_SIZE as usize);
+fn alloc_zeroed_table() -> Result<PhysicalAddr> {
+    let vaddr = kmalloc(PAGE_TABLE_SIZE as usize)?;
     unsafe {
         write_bytes(vaddr.as_ptr::<u8>(), 0, PAGE_TABLE_SIZE as usize);
     }
     vaddr
         .to_physical()
-        .expect("kmalloc must return direct-map virtual address")
+        .map_err(|_| MemoryError::PointerNotInDirectMap { addr: vaddr.as_u64() })
 }
 
 fn read_cr3() -> PhysicalAddr {

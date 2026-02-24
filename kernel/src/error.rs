@@ -1,9 +1,9 @@
 use thiserror::Error as ThisError;
 
-use crate::memory::address::AddressError;
+use crate::memory::errors::MemoryError;
 
 #[derive(ThisError, Debug)]
 pub enum Error {
-    #[error("address convertion error: {0}")]
-    Address(AddressError),
+    #[error("memory error: {0}")]
+    Memory(MemoryError),
 }

@@ -124,7 +124,7 @@ impl Scheduler {
             .expect("process table is full");
 
         let pml4_base = PageTable::alloc_user_pml4().expect("allocate user pml4");
-        let stack_base = palloc(PROCESS_STACK_PAGES);
+        let stack_base = palloc(PROCESS_STACK_PAGES).expect("allocate process stack");
         let stack_top = stack_base
             .to_virtual()
             .expect("process stack must be direct-map address")
@@ -199,7 +199,7 @@ impl Scheduler {
 
         if user_root.as_u64() != 0 {
             let root = PageTable::from_paddr_mut(user_root).expect("valid user root page table");
-            root.free();
+            root.free().expect("free user page table tree");
         }
 
         if let Some(next) = self.find_next_ready(current) {
@@ -328,9 +328,15 @@ unsafe extern "C" {
 
 #[inline(always)]
 unsafe fn switch_context(plan: SwitchPlan) {
-    SWITCH_OLD_CTX = plan.old;
-    SWITCH_NEW_CTX = plan.new;
-    __context_switch();
+    unsafe {
+        SWITCH_OLD_CTX = plan.old;
+    }
+    unsafe {
+        SWITCH_NEW_CTX = plan.new;
+    }
+    unsafe {
+        __context_switch();
+    }
 }
 
 fn save_current_fxstate(context: &mut Context) {
