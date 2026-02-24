@@ -4,6 +4,7 @@ mod x64;
 
 pub use self::error::{Error, Result};
 use kernel::memory::constants::{KERNEL_CODE_SIZE, KERNEL_CODE_VIRT, MAX_PHYSICAL_ADDR};
+use kvm_bindings::KVM_MAX_CPUID_ENTRIES;
 use kvm_ioctls::{Kvm, VmFd};
 use vm_memory::{Bytes, GuestAddress, GuestMemoryMmap};
 use x64::{GUEST_BASE, init_x64};
@@ -27,7 +28,10 @@ impl Vm {
     pub fn new() -> Result<Self> {
         let kvm = Kvm::new()?;
         let vm = kvm.create_vm()?;
-        let vcpus = vec![vm.create_vcpu(0)?];
+        let vcpu = vm.create_vcpu(0)?;
+        let cpuid = kvm.get_supported_cpuid(KVM_MAX_CPUID_ENTRIES)?;
+        vcpu.set_cpuid2(&cpuid)?;
+        let vcpus = vec![vcpu];
 
         let boot_mem: GuestMemoryMmap<()> =
             GuestMemoryMmap::from_ranges(&[(GUEST_BASE, MEM_SIZE)])?;

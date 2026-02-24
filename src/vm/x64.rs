@@ -16,9 +16,14 @@ const PTE_PS: u64 = 0x80;
 
 // Control-register / system constants
 const CR4_PAE: u64 = 1 << 5;
+const CR4_OSFXSR: u64 = 1 << 9;
+const CR4_OSXMMEXCPT: u64 = 1 << 10;
 const EFER_LME: u64 = 1 << 8;
 const EFER_LMA: u64 = 1 << 10;
 const CR0_PE: u64 = 1 << 0;
+const CR0_MP: u64 = 1 << 1;
+const CR0_EM: u64 = 1 << 2;
+const CR0_TS: u64 = 1 << 3;
 const CR0_NE: u64 = 1 << 5;
 const CR0_PG: u64 = 1 << 31;
 const RFLAGS_RESERVED: u64 = 2;
@@ -108,7 +113,7 @@ pub fn init_x64(
 
     // CR4.PAE must be set to enable physical-address-extension paging required
     // by 64-bit mode page tables.
-    sregs.cr4 |= CR4_PAE;
+    sregs.cr4 |= CR4_PAE | CR4_OSFXSR | CR4_OSXMMEXCPT;
 
     // EFER.LME enables Long Mode; EFER.LMA indicates Long Mode Active.
     sregs.efer = EFER_LME | EFER_LMA;
@@ -134,8 +139,10 @@ pub fn init_x64(
 
     // CR0: enable protected mode (PE) and paging (PG). Also enable NE (numeric
     // error) so x87 exceptions behave as expected.
-    sregs.cr0 |= CR0_PG | CR0_PE; // paging + protected mode
+    sregs.cr0 |= CR0_PG | CR0_PE | CR0_MP; // paging + protected mode + monitor coprocessor
     sregs.cr0 |= CR0_NE; // numeric error
+    sregs.cr0 &= !CR0_EM; // enable x87/SSE instructions
+    sregs.cr0 &= !CR0_TS; // allow immediate FPU/SSE use
 
     vcpus[0].set_sregs(&sregs)?;
 
