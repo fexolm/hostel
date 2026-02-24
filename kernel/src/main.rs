@@ -6,7 +6,12 @@ use kernel::memory::alloc::palloc::palloc;
 #[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    kernel::console::init();
+    kernel::println!("kernel: boot");
+
     let _ = palloc(1);
+    kernel::println!("kernel: palloc(1) ok");
+
     loop {
         unsafe {
             core::arch::asm!("hlt");
@@ -18,7 +23,10 @@ pub extern "C" fn _start() -> ! {
 
 #[cfg(not(test))]
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    kernel::console::init();
+    kernel::println!("kernel panic: {}", info);
+
     loop {
         unsafe {
             core::arch::asm!("hlt");
