@@ -100,9 +100,11 @@ pub fn pfree(addr: PhysicalAddr, pages: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::alloc::ALLOC_TEST_LOCK;
 
     #[test]
     fn test_page_allocator() {
+        let _guard = ALLOC_TEST_LOCK.lock();
         let mut allocator = PageAllocator::new();
         let first_page = PALLOC_FIRST_PAGE.as_u64();
         let addr1 = allocator.alloc(1);

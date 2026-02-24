@@ -282,9 +282,11 @@ pub fn kfree(ptr: VirtualAddr) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::alloc::ALLOC_TEST_LOCK;
 
     #[test]
     fn class_rounding_works() {
+        let _guard = ALLOC_TEST_LOCK.lock();
         assert_eq!(size_to_class(0), 1024);
         assert_eq!(size_to_class(1024), 1024);
         assert_eq!(size_to_class(1025), 2048);
@@ -293,6 +295,7 @@ mod tests {
 
     #[test]
     fn class_boundaries_are_powers_of_two() {
+        let _guard = ALLOC_TEST_LOCK.lock();
         for shift in MIN_SHIFT..=MAX_SHIFT {
             let class = 1usize << shift;
             assert_eq!(size_to_class(class - 1), class);
@@ -306,11 +309,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "kmalloc supports up to 16 MiB allocations")]
     fn class_rounding_panics_above_limit() {
+        let _guard = ALLOC_TEST_LOCK.lock();
         let _ = size_to_class(MAX_ALLOC_SIZE + 1);
     }
 
     #[test]
     fn kmalloc_large_is_contiguous_and_reused() {
+        let _guard = ALLOC_TEST_LOCK.lock();
         let mut alloc = KmallocAllocator::new();
 
         let a = alloc.alloc((1 << 22) + 1); // rounds to 8 MiB
@@ -338,6 +343,7 @@ mod tests {
 
     #[test]
     fn kmalloc_large_allocations_do_not_overlap() {
+        let _guard = ALLOC_TEST_LOCK.lock();
         let mut alloc = KmallocAllocator::new();
 
         let a = alloc.alloc(1 << 22); // 4 MiB
@@ -359,6 +365,7 @@ mod tests {
 
     #[test]
     fn kmalloc_large_free_and_realloc_same_class_reuses_address() {
+        let _guard = ALLOC_TEST_LOCK.lock();
         let mut alloc = KmallocAllocator::new();
 
         let a = alloc.alloc(1 << 24); // 16 MiB

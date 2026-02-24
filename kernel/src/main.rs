@@ -3,7 +3,7 @@
 
 use kernel::process;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
     kernel::console::init();
     kernel::println!("kernel: boot");

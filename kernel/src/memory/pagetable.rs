@@ -1,20 +1,19 @@
-#![allow(unused)]
+use core::arch::asm;
+use core::ptr::copy_nonoverlapping;
+use core::ptr::write_bytes;
+
 use crate::memory::{
-    address::PhysicalAddr,
-    alloc::palloc::{palloc, pfree},
-    constants::PAGE_SIZE,
+    address::{AddressError, PhysicalAddr, VirtualAddr},
+    alloc::kmalloc::{kfree, kmalloc},
+    constants::{DIRECT_MAP_OFFSET, DIRECT_MAP_PML4, PAGE_TABLE_ENTRIES, PAGE_TABLE_SIZE},
 };
 
 const PRESENT: u64 = 1 << 0;
 const WRITABLE: u64 = 1 << 1;
 const USER_ACCESSIBLE: u64 = 1 << 2;
-const WRITE_THROUGH: u64 = 1 << 3;
-const NO_CACHE: u64 = 1 << 4;
-const ACCESSED: u64 = 1 << 5;
-const DIRTY: u64 = 1 << 6;
 const HUGE_PAGE: u64 = 1 << 7;
-const GLOBAL: u64 = 1 << 8;
-const NO_EXECUTE: u64 = 1 << 63;
+const ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
+const USER_PML4_LIMIT: usize = DIRECT_MAP_OFFSET.pml4_index() as usize;
 
 #[derive(Clone, Copy)]
 pub struct PageTableEntry(u64);
@@ -33,172 +32,137 @@ impl PageTableEntry {
     }
 
     pub fn addr(&self) -> PhysicalAddr {
-        PhysicalAddr::new(self.0 & 0x000F_FFFF_FFFF_F000)
+        PhysicalAddr::new(self.0 & ADDR_MASK)
     }
 }
 
-#[repr(align(4096))]
-#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PageTableLevel {
+    Pml4,
+    Pdpt,
+    Pd,
+}
+
+impl PageTableLevel {
+    fn next(self) -> Option<Self> {
+        match self {
+            Self::Pml4 => Some(Self::Pdpt),
+            Self::Pdpt => Some(Self::Pd),
+            Self::Pd => None,
+        }
+    }
+}
+
+#[repr(C, align(4096))]
 pub struct PageTable {
-    entries: [PageTableEntry; 512],
+    entries: [PageTableEntry; PAGE_TABLE_ENTRIES as usize],
 }
 
-const PAGE_TABLES_PER_PAGE: usize = PAGE_SIZE as usize / size_of::<PageTable>();
-
-#[derive(Clone, Copy)]
-pub struct PageTableBitmap {
-    bitmap: [u64; PAGE_TABLES_PER_PAGE / 64],
-}
-
-impl PageTableBitmap {
-    pub fn new() -> Self {
-        Self {
-            bitmap: [0; PAGE_TABLES_PER_PAGE / 64],
-        }
+impl PageTable {
+    pub fn current_pml4_mut() -> Result<&'static mut Self, AddressError> {
+        Self::from_paddr_mut(read_cr3())
     }
 
-    pub fn alloc(&mut self) -> Option<usize> {
-        for (i, word) in self.bitmap.iter_mut().enumerate() {
-            let free_bits = !*word;
-
-            if free_bits != 0 {
-                let j = free_bits.trailing_zeros() as usize;
-
-                *word |= 1 << j;
-                return Some(i * 64 + j);
-            }
-        }
-        None
+    pub fn from_paddr(paddr: PhysicalAddr) -> Result<&'static Self, AddressError> {
+        let vaddr = paddr.to_virtual()?;
+        Ok(unsafe { &*vaddr.as_ptr::<Self>() })
     }
 
-    pub fn free(&mut self, index: usize) {
-        let word_index = index / 64;
-        let bit_index = index % 64;
-        self.bitmap[word_index] &= !(1 << bit_index);
-    }
-}
-
-pub struct PageTableAlloc {
-    pages: [PhysicalAddr; 64],
-    bitmap: [PageTableBitmap; 64],
-    count: usize,
-}
-
-impl PageTableAlloc {
-    pub fn new() -> Self {
-        Self {
-            pages: [PhysicalAddr::new(0); 64],
-            bitmap: [PageTableBitmap::new(); 64],
-            count: 0,
-        }
+    pub fn from_paddr_mut(paddr: PhysicalAddr) -> Result<&'static mut Self, AddressError> {
+        Ok(unsafe { paddr.to_virtual()?.as_ref_mut::<Self>() })
     }
 
-    pub fn alloc(&mut self) -> Option<u64> {
-        for i in 0..self.count {
-            if let Some(index) = self.bitmap[i].alloc() {
-                return Some(
-                    self.pages[i].as_u64() + (index as u64 * size_of::<PageTable>() as u64),
-                );
-            }
+    pub fn alloc_user_pml4() -> Result<PhysicalAddr, AddressError> {
+        let paddr = alloc_zeroed_table();
+        let pml4 = Self::from_paddr_mut(paddr)?;
+        let kernel = Self::from_paddr_mut(DIRECT_MAP_PML4)?;
+
+        unsafe {
+            copy_nonoverlapping(
+                kernel.entries.as_ptr().add(USER_PML4_LIMIT),
+                pml4.entries.as_mut_ptr().add(USER_PML4_LIMIT),
+                PAGE_TABLE_ENTRIES as usize - USER_PML4_LIMIT,
+            );
         }
-        if self.count < self.pages.len() {
-            let page = palloc(1);
-            self.pages[self.count] = page;
-            self.count += 1;
-            return self.alloc();
-        }
-        panic!("Out of page table memory");
+
+        Ok(paddr)
     }
 
-    pub fn free(&mut self, addr: u64) {
-        for i in 0..self.count {
-            if addr >= self.pages[i].as_u64() && addr < self.pages[i].as_u64() + PAGE_SIZE {
-                let index =
-                    ((addr - self.pages[i].as_u64()) / size_of::<PageTable>() as u64) as usize;
-                self.bitmap[i].free(index);
-                if self.bitmap[i].bitmap.iter().all(|&b| b == 0) {
-                    pfree(self.pages[i], 1);
+    pub fn get(&mut self, vaddr: VirtualAddr) -> Result<&mut PageTableEntry, AddressError> {
+        self.get_level(vaddr, PageTableLevel::Pml4)
+    }
 
-                    self.pages.swap(i, self.count - 1);
-                    self.bitmap.swap(i, self.count - 1);
-                    self.count -= 1;
+    fn get_level(
+        &mut self,
+        vaddr: VirtualAddr,
+        level: PageTableLevel,
+    ) -> Result<&mut PageTableEntry, AddressError> {
+        if level == PageTableLevel::Pd {
+            return Ok(&mut self.entries[index_for(level, vaddr)]);
+        }
+
+        let entry = &mut self.entries[index_for(level, vaddr)];
+        if !entry.is_present() {
+            entry.set_table(alloc_zeroed_table());
+        }
+
+        let next = level.next().expect("next level must exist");
+        let child = Self::from_paddr_mut(entry.addr())?;
+        child.get_level(vaddr, next)
+    }
+
+    pub fn free(&mut self) {
+        self.free_level(PageTableLevel::Pml4)
+    }
+
+    fn free_level(&mut self, level: PageTableLevel) {
+        let end = if level == PageTableLevel::Pml4 {
+            USER_PML4_LIMIT
+        } else {
+            PAGE_TABLE_ENTRIES as usize
+        };
+
+        if let Some(next) = level.next() {
+            for i in 0..end {
+                let entry = self.entries[i];
+                if entry.is_present() {
+                    let child =
+                        Self::from_paddr_mut(entry.addr()).expect("child page table must be valid");
+                    child.free_level(next);
                 }
-                return;
             }
         }
-        panic!("Invalid page table address");
+
+        kfree(self.self_vaddr());
+    }
+
+    fn self_vaddr(&self) -> VirtualAddr {
+        VirtualAddr::new(self as *const Self as usize as u64)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::Kernel;
-
-    use super::*;
-    use std::mem::zeroed;
-
-    fn make_dummy_kernel() -> &'static Kernel {
-        let boxed: Box<Kernel> = Box::new(unsafe { zeroed() });
-        Box::leak(boxed)
+fn alloc_zeroed_table() -> PhysicalAddr {
+    let vaddr = kmalloc(PAGE_TABLE_SIZE as usize);
+    unsafe {
+        write_bytes(vaddr.as_ptr::<u8>(), 0, PAGE_TABLE_SIZE as usize);
     }
+    vaddr
+        .to_physical()
+        .expect("kmalloc must return direct-map virtual address")
+}
 
-    #[test]
-    fn bitmap_alloc_free_cycle() {
-        let mut bm = PageTableBitmap::new();
-        let cap = PAGE_TABLES_PER_PAGE;
-
-        // fresh bitmap contains no bits set
-        for &w in bm.bitmap.iter() {
-            assert_eq!(w, 0);
-        }
-
-        // allocate every entry we can
-        let mut allocated = Vec::new();
-        for _ in 0..cap {
-            let idx = bm.alloc().expect("should be able to allocate");
-            allocated.push(idx);
-        }
-        assert!(
-            bm.alloc().is_none(),
-            "no more slots after capacity is reached"
-        );
-
-        // free them all
-        for &i in &allocated {
-            bm.free(i);
-        }
-
-        // and make sure we can allocate the same sequence again
-        for &expected in &allocated {
-            let idx = bm.alloc().expect("re‑allocation should succeed");
-            assert_eq!(idx, expected);
-        }
-        assert!(bm.alloc().is_none());
+fn read_cr3() -> PhysicalAddr {
+    let value: u64;
+    unsafe {
+        asm!("mov {}, cr3", out(reg) value, options(nostack, preserves_flags));
     }
+    PhysicalAddr::new(value)
+}
 
-    #[test]
-    fn pagetablealloc_alloc_and_free() {
-        let k = make_dummy_kernel();
-
-        let mut alloc = PageTableAlloc::new();
-
-        // pretend we already have one page and don't touch the kernel
-        alloc.pages[0] = PhysicalAddr::new(0x1000);
-        alloc.count = 1;
-
-        let addr1 = alloc.alloc().unwrap();
-        assert_eq!(addr1, 0x1000);
-
-        let step = core::mem::size_of::<PageTable>() as u64;
-        let addr2 = alloc.alloc().unwrap();
-        assert_eq!(addr2, 0x1000 + step);
-
-        // free the first slot; page is not empty, so kernel.free() is never
-        // invoked.
-        alloc.free(addr1);
-
-        // the freed slot should be reused
-        let addr3 = alloc.alloc().unwrap();
-        assert_eq!(addr3, addr1);
+fn index_for(level: PageTableLevel, vaddr: VirtualAddr) -> usize {
+    match level {
+        PageTableLevel::Pml4 => vaddr.pml4_index() as usize,
+        PageTableLevel::Pdpt => vaddr.pdpt_index() as usize,
+        PageTableLevel::Pd => vaddr.pd_index() as usize,
     }
 }

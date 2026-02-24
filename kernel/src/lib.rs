@@ -5,26 +5,6 @@ pub mod error;
 pub mod memory;
 pub mod process;
 
-pub struct Kernel {
-    pub pagetable_alloc: spin::Mutex<memory::pagetable::PageTableAlloc>,
-}
-
-impl Kernel {
-    pub fn new() -> Self {
-        Self {
-            pagetable_alloc: spin::Mutex::new(memory::pagetable::PageTableAlloc::new()),
-        }
-    }
-
-    pub fn run(&self) -> ! {
-        loop {
-            unsafe {
-                core::arch::asm!("hlt");
-            }
-        }
-    }
-}
-
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => ({

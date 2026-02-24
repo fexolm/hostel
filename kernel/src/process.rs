@@ -1,17 +1,16 @@
 use core::arch::{asm, global_asm};
-use core::ptr::{copy_nonoverlapping, null, null_mut};
+use core::ptr::{null, null_mut};
 
 use crate::memory::{
     address::PhysicalAddr,
     alloc::palloc::palloc,
-    constants::{DIRECT_MAP_OFFSET, DIRECT_MAP_PML4, PAGE_SIZE, PAGE_TABLE_ENTRIES},
+    constants::PAGE_SIZE,
+    pagetable::PageTable,
 };
 
 const MAX_PROCESSES: usize = 8;
 const PROCESS_STACK_PAGES: u64 = 1;
 const NO_PROCESS: usize = usize::MAX;
-const PML4_COPY_START: usize = DIRECT_MAP_OFFSET.pml4_index() as usize;
-
 pub type ProcessFn = fn();
 
 #[repr(C, align(16))]
@@ -80,7 +79,6 @@ struct Process {
     entry: Option<ProcessFn>,
     _stack_base: PhysicalAddr,
     _stack_pages: u64,
-    _pml4_base: PhysicalAddr,
 }
 
 impl Process {
@@ -92,7 +90,6 @@ impl Process {
             entry: None,
             _stack_base: PhysicalAddr::new(0),
             _stack_pages: 0,
-            _pml4_base: PhysicalAddr::new(0),
         }
     }
 }
@@ -126,7 +123,7 @@ impl Scheduler {
             .position(|proc| proc.state == State::Empty || proc.state == State::Exited)
             .expect("process table is full");
 
-        let pml4_base = clone_current_pml4();
+        let pml4_base = PageTable::alloc_user_pml4().expect("allocate user pml4");
         let stack_base = palloc(PROCESS_STACK_PAGES);
         let stack_top = stack_base
             .to_virtual()
@@ -152,7 +149,6 @@ impl Scheduler {
             entry: Some(entry),
             _stack_base: stack_base,
             _stack_pages: PROCESS_STACK_PAGES,
-            _pml4_base: pml4_base,
         };
         save_current_fxstate(&mut self.processes[slot].context);
 
@@ -195,9 +191,16 @@ impl Scheduler {
     fn plan_exit_current(&mut self) -> SwitchPlan {
         let current = self.current;
         assert!(current != NO_PROCESS, "no running process to exit");
+        let user_root = PhysicalAddr::new(self.processes[current].context.cr3);
 
         self.processes[current].state = State::Exited;
         self.processes[current].entry = None;
+        self.processes[current].context.cr3 = 0;
+
+        if user_root.as_u64() != 0 {
+            let root = PageTable::from_paddr_mut(user_root).expect("valid user root page table");
+            root.free();
+        }
 
         if let Some(next) = self.find_next_ready(current) {
             self.processes[next].state = State::Running;
@@ -240,9 +243,9 @@ impl Scheduler {
 }
 
 static SCHEDULER: spin::Mutex<Scheduler> = spin::Mutex::new(Scheduler::new());
-#[no_mangle]
+#[unsafe(no_mangle)]
 static mut SWITCH_OLD_CTX: *mut Context = null_mut();
-#[no_mangle]
+#[unsafe(no_mangle)]
 static mut SWITCH_NEW_CTX: *const Context = null();
 
 global_asm!(
@@ -339,37 +342,6 @@ fn save_current_fxstate(context: &mut Context) {
             options(nostack),
         );
     }
-}
-
-fn clone_current_pml4() -> PhysicalAddr {
-    let src_pml4 = DIRECT_MAP_PML4;
-    let dst_pml4 = palloc(1);
-
-    let src = src_pml4
-        .to_virtual()
-        .expect("source pml4 must be mappable")
-        .as_ptr::<u64>();
-    let dst = dst_pml4
-        .to_virtual()
-        .expect("destination pml4 must be mappable")
-        .as_ptr::<u64>();
-
-    unsafe {
-        // Lower half is private to the process.
-        let mut i = 0usize;
-        while i < PML4_COPY_START {
-            *dst.add(i) = 0;
-            i += 1;
-        }
-        // Kernel/direct-map half is shared from the kernel PML4.
-        copy_nonoverlapping(
-            src.add(PML4_COPY_START),
-            dst.add(PML4_COPY_START),
-            PAGE_TABLE_ENTRIES as usize - PML4_COPY_START,
-        );
-    }
-
-    dst_pml4
 }
 
 extern "C" fn process_trampoline() -> ! {
