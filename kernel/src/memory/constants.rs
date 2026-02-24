@@ -1,4 +1,4 @@
-use crate::address::{PhysicalAddr, VirtualAddr};
+use crate::memory::address::{PhysicalAddr, VirtualAddr};
 
 pub const PAGE_SIZE: u64 = 2 << 20;
 pub const MAX_PHYSICAL_ADDR: u64 = 0x0000_00FF_FFFF_FFFF;

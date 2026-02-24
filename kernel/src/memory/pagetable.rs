@@ -1,8 +1,8 @@
 #![allow(unused)]
-use crate::{
+use crate::memory::{
     address::PhysicalAddr,
+    alloc::palloc::{palloc, pfree},
     constants::PAGE_SIZE,
-    palloc::{palloc, pfree},
 };
 
 const PRESENT: u64 = 1 << 0;
@@ -102,7 +102,7 @@ impl PageTableAlloc {
             }
         }
         if self.count < self.pages.len() {
-            let page = palloc();
+            let page = palloc(1);
             self.pages[self.count] = page;
             self.count += 1;
             return self.alloc();
@@ -117,7 +117,7 @@ impl PageTableAlloc {
                     ((addr - self.pages[i].as_u64()) / size_of::<PageTable>() as u64) as usize;
                 self.bitmap[i].free(index);
                 if self.bitmap[i].bitmap.iter().all(|&b| b == 0) {
-                    pfree(self.pages[i]);
+                    pfree(self.pages[i], 1);
 
                     self.pages.swap(i, self.count - 1);
                     self.bitmap.swap(i, self.count - 1);

@@ -4,6 +4,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
+use kernel::memory::constants::{KERNEL_CODE_PHYS, KERNEL_CODE_VIRT};
+
 fn gen_linker_script(linker_script_path: &PathBuf) {
     let linker_script_content = format!(
         r#"
@@ -39,8 +41,8 @@ fn gen_linker_script(linker_script_path: &PathBuf) {
             }} > virt :data
         }}
         "#,
-        virt = kernel::constants::KERNEL_CODE_VIRT.as_u64(),
-        phys = kernel::constants::KERNEL_CODE_PHYS.as_u64(),
+        virt = KERNEL_CODE_VIRT.as_u64(),
+        phys = KERNEL_CODE_PHYS.as_u64(),
     );
 
     let mut f = File::create(linker_script_path).unwrap();

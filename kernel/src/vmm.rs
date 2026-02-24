@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use crate::{
+use crate::memory::{
     address::{AddressError, PhysicalAddr, VirtualAddr},
     constants::PAGE_TABLE_ENTRIES,
     pagetable::PageTableEntry,

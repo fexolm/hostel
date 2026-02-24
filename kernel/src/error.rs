@@ -1,6 +1,6 @@
 use thiserror::Error as ThisError;
 
-use crate::address::AddressError;
+use crate::memory::address::AddressError;
 
 #[derive(ThisError, Debug)]
 pub enum Error {

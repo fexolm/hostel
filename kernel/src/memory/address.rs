@@ -33,10 +33,12 @@ impl PhysicalAddr {
     }
 
     pub const fn to_virtual(self) -> Result<VirtualAddr, AddressError> {
-        if self.0 > crate::constants::MAX_PHYSICAL_ADDR {
+        if self.0 > crate::memory::constants::MAX_PHYSICAL_ADDR {
             Err(AddressError::PAddrConvertionFailed(self))
         } else {
-            Ok(VirtualAddr(self.0 + crate::constants::DIRECT_MAP_OFFSET.0))
+            Ok(VirtualAddr(
+                self.0 + crate::memory::constants::DIRECT_MAP_OFFSET.0,
+            ))
         }
     }
 }
@@ -64,12 +66,16 @@ impl VirtualAddr {
     }
 
     pub const fn to_physical(self) -> Result<PhysicalAddr, AddressError> {
-        if self.0 < crate::constants::DIRECT_MAP_OFFSET.0
-            || self.0 > crate::constants::DIRECT_MAP_OFFSET.0 + crate::constants::MAX_PHYSICAL_ADDR
+        if self.0 < crate::memory::constants::DIRECT_MAP_OFFSET.0
+            || self.0
+                > crate::memory::constants::DIRECT_MAP_OFFSET.0
+                    + crate::memory::constants::MAX_PHYSICAL_ADDR
         {
             Err(AddressError::VAddrConvertionFailed(self))
         } else {
-            Ok(PhysicalAddr(self.0 - crate::constants::DIRECT_MAP_OFFSET.0))
+            Ok(PhysicalAddr(
+                self.0 - crate::memory::constants::DIRECT_MAP_OFFSET.0,
+            ))
         }
     }
 

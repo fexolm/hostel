@@ -2,7 +2,7 @@ pub mod error;
 
 pub use self::error::{Error, Result};
 
-use kernel::constants::{
+use kernel::memory::constants::{
     DIRECT_MAP_PD, DIRECT_MAP_PD_COUNT, DIRECT_MAP_PDPT, DIRECT_MAP_PDPT_COUNT, DIRECT_MAP_PML4,
     DIRECT_MAP_PML4_ENTRIES_COUNT, DIRECT_MAP_PML4_OFFSET, KERNEL_CODE_PD, KERNEL_CODE_PDPD,
     KERNEL_CODE_PHYS, KERNEL_CODE_SIZE, KERNEL_CODE_VIRT, KERNEL_STACK, MAX_PHYSICAL_ADDR,
@@ -237,7 +237,7 @@ impl Vm {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::vm::Vm;
 
     #[test]
     fn vm_loads_kernel_elf_from_build_script() {
@@ -245,7 +245,7 @@ mod tests {
         let path = env!("KERNEL_BIN");
         let data = std::fs::read(path).expect("read kernel elf");
 
-        let mut vm = Vm::new().expect("create vm");
+        let mut vm = Vm::new().unwrap();
         vm.load_elf(&data).expect("load elf");
         vm.run().expect("run guest");
     }
