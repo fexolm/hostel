@@ -53,10 +53,8 @@ impl PageAllocator {
             run_len += 1;
             if run_len == pages {
                 self.mark_pages(run_start, pages, true);
-                let mut used_page = run_start;
-                while used_page < run_start + pages {
+                for used_page in run_start..(run_start + pages) {
                     self.refcounts[used_page] = 1;
-                    used_page += 1;
                 }
                 return Ok(PhysicalAddr::new(run_start * PAGE_SIZE));
             }
