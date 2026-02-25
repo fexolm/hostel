@@ -36,12 +36,9 @@ impl PageAllocator {
         let total_pages = MAX_PHYSICAL_ADDR / PAGE_SIZE;
         let mut run_start = 0;
         let mut run_len = 0;
-        let mut page = 0;
-
-        while page < total_pages {
+        for page in 0..total_pages {
             if self.is_page_used(page) {
                 run_len = 0;
-                page += 1;
                 continue;
             }
 
@@ -54,20 +51,14 @@ impl PageAllocator {
                 self.mark_pages(run_start, pages, true);
                 return Ok(PhysicalAddr::new(run_start * PAGE_SIZE));
             }
-
-            page += 1;
         }
 
         Err(MemoryError::OutOfMemory)
     }
 
-    fn free(&mut self, addr: PhysicalAddr, pages: usize) -> Result<()> {
-        if pages == 0 {
-            return Err(MemoryError::InvalidPageCount { pages });
-        }
-
+    fn free(&mut self, addr: PhysicalAddr) -> Result<()> {
         let page_index = addr.as_usize() / PAGE_SIZE;
-        self.mark_pages(page_index, pages, false);
+        self.mark_pages(page_index, 1, false);
         Ok(())
     }
 
@@ -78,9 +69,7 @@ impl PageAllocator {
     }
 
     fn mark_pages(&mut self, start_page: usize, pages: usize, used: bool) {
-        let mut page = start_page;
-        let end = start_page + pages;
-        while page < end {
+        for page in start_page..(start_page + pages) {
             let word = page / 64;
             let bit = page % 64;
             if used {
@@ -88,7 +77,6 @@ impl PageAllocator {
             } else {
                 self.bitmap[word] &= !(1 << bit);
             }
-            page += 1;
         }
     }
 }
@@ -99,8 +87,8 @@ pub fn palloc(pages: usize) -> Result<PhysicalAddr> {
     PAGE_ALLOCATOR.lock().alloc(pages)
 }
 
-pub fn pfree(addr: PhysicalAddr, pages: usize) -> Result<()> {
-    PAGE_ALLOCATOR.lock().free(addr, pages)
+pub fn pfree(addr: PhysicalAddr) -> Result<()> {
+    PAGE_ALLOCATOR.lock().free(addr)
 }
 
 #[cfg(test)]
@@ -117,7 +105,7 @@ mod tests {
         let addr2 = allocator.alloc(1).unwrap();
         assert_eq!(addr1, PhysicalAddr::new(first_page));
         assert_eq!(addr2, PhysicalAddr::new(first_page + PAGE_SIZE));
-        allocator.free(addr1, 1).unwrap();
+        allocator.free(addr1).unwrap();
         let addr3 = allocator.alloc(1).unwrap();
         assert_eq!(addr3, PhysicalAddr::new(first_page)); // should reuse the freed page
     }
