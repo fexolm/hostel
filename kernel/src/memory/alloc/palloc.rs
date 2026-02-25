@@ -4,7 +4,7 @@ use crate::memory::{
     errors::{MemoryError, Result},
 };
 
-const BITMAP_SIZE: usize = (MAX_PHYSICAL_ADDR / PAGE_SIZE / 64) as usize;
+const BITMAP_SIZE: usize = MAX_PHYSICAL_ADDR / PAGE_SIZE / 64;
 
 #[repr(align(4096))]
 #[repr(C)]
@@ -14,12 +14,12 @@ struct PageAllocator {
 
 impl PageAllocator {
     const fn new() -> Self {
-        let mut bitmap = [0u64; BITMAP_SIZE];
-        let mut page = 0u64;
-        let reserved_pages = PALLOC_FIRST_PAGE.as_u64() / PAGE_SIZE;
+        let mut bitmap = [0; BITMAP_SIZE];
+        let mut page = 0;
+        let reserved_pages = PALLOC_FIRST_PAGE.as_usize() / PAGE_SIZE;
 
         while page < reserved_pages {
-            let word = (page / 64) as usize;
+            let word = page / 64;
             let bit = page % 64;
             bitmap[word] |= 1 << bit;
             page += 1;
@@ -28,15 +28,15 @@ impl PageAllocator {
         Self { bitmap }
     }
 
-    fn alloc(&mut self, pages: u64) -> Result<PhysicalAddr> {
+    fn alloc(&mut self, pages: usize) -> Result<PhysicalAddr> {
         if pages == 0 {
             return Err(MemoryError::InvalidPageCount { pages });
         }
 
         let total_pages = MAX_PHYSICAL_ADDR / PAGE_SIZE;
-        let mut run_start = 0u64;
-        let mut run_len = 0u64;
-        let mut page = 0u64;
+        let mut run_start = 0;
+        let mut run_len = 0;
+        let mut page = 0;
 
         while page < total_pages {
             if self.is_page_used(page) {
@@ -61,27 +61,27 @@ impl PageAllocator {
         Err(MemoryError::OutOfMemory)
     }
 
-    fn free(&mut self, addr: PhysicalAddr, pages: u64) -> Result<()> {
+    fn free(&mut self, addr: PhysicalAddr, pages: usize) -> Result<()> {
         if pages == 0 {
             return Err(MemoryError::InvalidPageCount { pages });
         }
 
-        let page_index = addr.as_u64() / PAGE_SIZE;
+        let page_index = addr.as_usize() / PAGE_SIZE;
         self.mark_pages(page_index, pages, false);
         Ok(())
     }
 
-    fn is_page_used(&self, page_index: u64) -> bool {
-        let word_index = (page_index / 64) as usize;
+    fn is_page_used(&self, page_index: usize) -> bool {
+        let word_index = page_index / 64;
         let bit_index = page_index % 64;
         (self.bitmap[word_index] & (1 << bit_index)) != 0
     }
 
-    fn mark_pages(&mut self, start_page: u64, pages: u64, used: bool) {
+    fn mark_pages(&mut self, start_page: usize, pages: usize, used: bool) {
         let mut page = start_page;
         let end = start_page + pages;
         while page < end {
-            let word = (page / 64) as usize;
+            let word = page / 64;
             let bit = page % 64;
             if used {
                 self.bitmap[word] |= 1 << bit;
@@ -95,11 +95,11 @@ impl PageAllocator {
 
 static PAGE_ALLOCATOR: spin::Mutex<PageAllocator> = spin::Mutex::new(PageAllocator::new());
 
-pub fn palloc(pages: u64) -> Result<PhysicalAddr> {
+pub fn palloc(pages: usize) -> Result<PhysicalAddr> {
     PAGE_ALLOCATOR.lock().alloc(pages)
 }
 
-pub fn pfree(addr: PhysicalAddr, pages: u64) -> Result<()> {
+pub fn pfree(addr: PhysicalAddr, pages: usize) -> Result<()> {
     PAGE_ALLOCATOR.lock().free(addr, pages)
 }
 
@@ -112,7 +112,7 @@ mod tests {
     fn test_page_allocator() {
         let _guard = ALLOC_TEST_LOCK.lock();
         let mut allocator = PageAllocator::new();
-        let first_page = PALLOC_FIRST_PAGE.as_u64();
+        let first_page = PALLOC_FIRST_PAGE.as_usize();
         let addr1 = allocator.alloc(1).unwrap();
         let addr2 = allocator.alloc(1).unwrap();
         assert_eq!(addr1, PhysicalAddr::new(first_page));

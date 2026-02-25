@@ -21,7 +21,7 @@ impl Vmm {
         let pde = pml4.get(vaddr)?;
         if pde.is_present() {
             return Err(MemoryError::AlreadyMapped {
-                addr: vaddr.as_u64(),
+                addr: vaddr.as_usize(),
             });
         }
         pde.set_paddr(paddr);

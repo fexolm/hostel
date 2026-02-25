@@ -7,9 +7,9 @@ use crate::memory::{
 
 const MIN_SHIFT: u32 = 10; // 1 KiB
 const MAX_SHIFT: u32 = 24; // 16 MiB
-const MIN_ALLOC_SIZE: usize = 1usize << MIN_SHIFT;
-const MAX_ALLOC_SIZE: usize = 1usize << MAX_SHIFT;
-const SMALL_CLASS_COUNT: usize = (21 - MIN_SHIFT + 1) as usize; // 1 KiB .. 2 MiB
+const MIN_ALLOC_SIZE: usize = 1 << MIN_SHIFT;
+const MAX_ALLOC_SIZE: usize = 1 << MAX_SHIFT;
+const SMALL_CLASS_COUNT: usize = 12; // 1 KiB .. 2 MiB
 const MAX_SLABS_PER_CLASS: usize = 128;
 const MAX_LARGE_ALLOCS: usize = 256;
 const FREE_LIST_END: u32 = u32::MAX;
@@ -56,7 +56,7 @@ impl SmallClass {
 struct LargeAlloc {
     in_use: bool,
     base: PhysicalAddr,
-    pages: u64,
+    pages: usize,
 }
 
 impl LargeAlloc {
@@ -83,7 +83,7 @@ impl KmallocAllocator {
     }
 
     fn alloc(&mut self, size: usize) -> Result<VirtualAddr> {
-        let class_size = size_to_class(size)? as u64;
+        let class_size = size_to_class(size)?;
 
         if class_size <= PAGE_SIZE {
             self.alloc_small(class_size as u32)
@@ -95,7 +95,7 @@ impl KmallocAllocator {
     fn free(&mut self, ptr: VirtualAddr) -> Result<()> {
         let phys = ptr
             .to_physical()
-            .map_err(|_| MemoryError::PointerNotInDirectMap { addr: ptr.as_u64() })?;
+            .map_err(|_| MemoryError::PointerNotInDirectMap { addr: ptr.as_usize() })?;
 
         if self.free_small(phys)? {
             return Ok(());
@@ -127,7 +127,7 @@ impl KmallocAllocator {
     }
 
     fn free_small(&mut self, addr: PhysicalAddr) -> Result<bool> {
-        let p = addr.as_u64();
+        let p = addr.as_usize();
 
         for class in &mut self.small {
             for slab in &mut class.slabs {
@@ -135,13 +135,13 @@ impl KmallocAllocator {
                     continue;
                 }
 
-                let start = slab.base.as_u64();
+                let start = slab.base.as_usize();
                 let end = start + PAGE_SIZE;
                 if p < start || p >= end {
                     continue;
                 }
 
-                let block_size = slab.block_size as u64;
+                let block_size = slab.block_size as usize;
                 let offset = p - start;
                 if offset % block_size != 0 {
                     return Err(MemoryError::SlabAlignmentMismatch {
@@ -170,8 +170,8 @@ impl KmallocAllocator {
         Ok(false)
     }
 
-    fn alloc_large(&mut self, class_size: u64) -> Result<VirtualAddr> {
-        let pages = class_size / PAGE_SIZE;
+    fn alloc_large(&mut self, class_size: usize) -> Result<VirtualAddr> {
+        let pages = class_size.div_ceil(PAGE_SIZE);
         let base = palloc(pages)?;
 
         for slot in &mut self.large {
@@ -198,7 +198,7 @@ impl KmallocAllocator {
             }
         }
 
-        Err(MemoryError::UnknownAllocation { addr: addr.as_u64() })
+        Err(MemoryError::UnknownAllocation { addr: addr.as_usize() })
     }
 }
 
@@ -230,7 +230,7 @@ fn size_to_class(size: usize) -> Result<usize> {
 
 fn init_small_slab(slab: &mut SmallSlab, block_size: u32) -> Result<()> {
     let base = palloc(1)?;
-    let capacity = (PAGE_SIZE as u32) / block_size;
+    let capacity = PAGE_SIZE as u32 / block_size;
     if capacity == 0 {
         return Err(MemoryError::InvalidSlabCapacity);
     }
@@ -270,13 +270,13 @@ fn alloc_from_small_slab(slab: &mut SmallSlab) -> Result<VirtualAddr> {
     slab.free_head = next;
     slab.free_count -= 1;
 
-    let offset = idx as u64 * slab.block_size as u64;
+    let offset = idx as usize * slab.block_size as usize;
     slab.base.add(offset).to_virtual()
 }
 
 unsafe fn small_slab_link_ptr(slab: &SmallSlab, idx: u32) -> *mut u32 {
-    let addr = slab.base.as_u64() + idx as u64 * slab.block_size as u64;
-    VirtualAddr::new(DIRECT_MAP_OFFSET.as_u64() + addr).as_ptr::<u32>()
+    let addr = slab.base.as_usize() + idx as usize * slab.block_size as usize;
+    VirtualAddr::new(DIRECT_MAP_OFFSET.as_usize() + addr).as_ptr::<u32>()
 }
 
 static KMALLOC: spin::Mutex<KmallocAllocator> = spin::Mutex::new(KmallocAllocator::new());
@@ -307,7 +307,7 @@ mod tests {
     fn class_boundaries_are_powers_of_two() {
         let _guard = ALLOC_TEST_LOCK.lock();
         for shift in MIN_SHIFT..=MAX_SHIFT {
-            let class = 1usize << shift;
+            let class = 1 << shift;
             assert_eq!(size_to_class(class - 1).unwrap(), class);
             assert_eq!(size_to_class(class).unwrap(), class);
             if shift < MAX_SHIFT {
@@ -336,14 +336,14 @@ mod tests {
         assert_eq!(
             a.to_physical()
                 .unwrap()
-                .as_u64()
+                .as_usize()
                 % PAGE_SIZE,
             0
         );
         assert_eq!(
             b.to_physical()
                 .unwrap()
-                .as_u64()
+                .as_usize()
                 % PAGE_SIZE,
             0
         );
@@ -372,7 +372,7 @@ mod tests {
 
         assert_ne!(a_phys, b_phys);
         let diff = a_phys.abs_diff(b_phys);
-        assert!(diff >= (1 << 22) as u64);
+        assert!(diff >= (1 << 22));
     }
 
     #[test]

@@ -3,22 +3,22 @@ use thiserror::Error as ThisError;
 #[derive(ThisError, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryError {
     #[error("failed to convert virtual address {addr:#x} to physical")]
-    VirtualToPhysical { addr: u64 },
+    VirtualToPhysical { addr: usize },
 
     #[error("failed to convert physical address {addr:#x} to virtual")]
-    PhysicalToVirtual { addr: u64 },
+    PhysicalToVirtual { addr: usize },
 
     #[error("invalid page count: {pages}")]
-    InvalidPageCount { pages: u64 },
+    InvalidPageCount { pages: usize },
 
     #[error("out of memory")]
     OutOfMemory,
 
     #[error("virtual address {addr:#x} is already mapped")]
-    AlreadyMapped { addr: u64 },
+    AlreadyMapped { addr: usize },
 
     #[error("pointer {addr:#x} is not in direct-map region")]
-    PointerNotInDirectMap { addr: u64 },
+    PointerNotInDirectMap { addr: usize },
 
     #[error("allocation too large: requested {requested} bytes, max {max} bytes")]
     AllocationTooLarge { requested: usize, max: usize },
@@ -30,10 +30,10 @@ pub enum MemoryError {
     TooManyLargeAllocations,
 
     #[error("unknown allocation at physical address {addr:#x}")]
-    UnknownAllocation { addr: u64 },
+    UnknownAllocation { addr: usize },
 
     #[error("pointer {addr:#x} does not match slab alignment {block_size}")]
-    SlabAlignmentMismatch { addr: u64, block_size: u64 },
+    SlabAlignmentMismatch { addr: usize, block_size: usize },
 
     #[error("invalid slab capacity")]
     InvalidSlabCapacity,

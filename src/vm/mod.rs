@@ -14,7 +14,7 @@ use goblin::elf::Elf;
 use goblin::elf::program_header::PT_LOAD;
 use serial::SerialConsole16550;
 
-const MEM_SIZE: usize = MAX_PHYSICAL_ADDR as usize + 1;
+const MEM_SIZE: usize = MAX_PHYSICAL_ADDR + 1;
 
 pub struct Vm {
     _kvm: Kvm,
