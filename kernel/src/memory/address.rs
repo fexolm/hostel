@@ -7,7 +7,7 @@ pub struct PhysicalAddr(usize);
 
 impl PhysicalAddr {
     pub const fn new(addr: usize) -> Self {
-        Self(addr & !0xFFFusize)
+        Self(addr & !0xFFF)
     }
 
     pub const fn as_u64(self) -> u64 {
@@ -29,7 +29,7 @@ impl PhysicalAddr {
 
     pub const fn to_virtual(self) -> Result<VirtualAddr> {
         if self.0 > crate::memory::constants::MAX_PHYSICAL_ADDR {
-            Err(MemoryError::PhysicalToVirtual { addr: self.0 as u64 })
+            Err(MemoryError::PhysicalToVirtual { addr: self.0 })
         } else {
             Ok(VirtualAddr(
                 self.0 + crate::memory::constants::DIRECT_MAP_OFFSET.0,
@@ -70,7 +70,7 @@ impl VirtualAddr {
                 > crate::memory::constants::DIRECT_MAP_OFFSET.0
                     + crate::memory::constants::MAX_PHYSICAL_ADDR
         {
-            Err(MemoryError::VirtualToPhysical { addr: self.0 as u64 })
+            Err(MemoryError::VirtualToPhysical { addr: self.0 })
         } else {
             Ok(PhysicalAddr(
                 self.0 - crate::memory::constants::DIRECT_MAP_OFFSET.0,

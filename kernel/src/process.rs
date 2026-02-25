@@ -130,9 +130,9 @@ impl Scheduler {
             .expect("process stack must be direct-map address")
             .add(PAGE_SIZE * PROCESS_STACK_PAGES);
 
-        let initial_rsp = stack_top.as_u64() - core::mem::size_of::<u64>() as u64;
+        let initial_rsp = stack_top.as_usize() - core::mem::size_of::<u64>();
         unsafe {
-            *(initial_rsp as usize as *mut u64) = process_trampoline as *const () as usize as u64;
+            *(initial_rsp as *mut u64) = process_trampoline as *const () as usize as u64;
         }
 
         let pid = self.next_pid;
@@ -142,7 +142,7 @@ impl Scheduler {
             id: pid,
             state: State::Ready,
             context: Context {
-                rsp: initial_rsp,
+                rsp: initial_rsp as u64,
                 cr3: pml4_base.as_u64(),
                 ..Context::empty()
             },

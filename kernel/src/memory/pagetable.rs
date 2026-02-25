@@ -9,23 +9,23 @@ use crate::memory::{
     errors::{MemoryError, Result},
 };
 
-const PRESENT: u64 = 1 << 0;
-const WRITABLE: u64 = 1 << 1;
-const USER_ACCESSIBLE: u64 = 1 << 2;
-const HUGE_PAGE: u64 = 1 << 7;
-const ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
+const PRESENT: usize = 1 << 0;
+const WRITABLE: usize = 1 << 1;
+const USER_ACCESSIBLE: usize = 1 << 2;
+const HUGE_PAGE: usize = 1 << 7;
+const ADDR_MASK: usize = 0x000F_FFFF_FFFF_F000;
 const USER_PML4_LIMIT: usize = DIRECT_MAP_OFFSET.pml4_index();
 
 #[derive(Clone, Copy)]
-pub struct PageTableEntry(u64);
+pub struct PageTableEntry(usize);
 
 impl PageTableEntry {
     pub fn set_table(&mut self, addr: PhysicalAddr) {
-        self.0 = addr.as_u64() | PRESENT | WRITABLE | USER_ACCESSIBLE;
+        self.0 = addr.as_usize() | PRESENT | WRITABLE | USER_ACCESSIBLE;
     }
 
     pub fn set_paddr(&mut self, addr: PhysicalAddr) {
-        self.0 = addr.as_u64() | PRESENT | WRITABLE | USER_ACCESSIBLE | HUGE_PAGE;
+        self.0 = addr.as_usize() | PRESENT | WRITABLE | USER_ACCESSIBLE | HUGE_PAGE;
     }
 
     pub fn is_present(&self) -> bool {
@@ -33,7 +33,7 @@ impl PageTableEntry {
     }
 
     pub fn addr(&self) -> PhysicalAddr {
-        PhysicalAddr::new((self.0 & ADDR_MASK) as usize)
+        PhysicalAddr::new(self.0 & ADDR_MASK)
     }
 }
 
@@ -109,7 +109,7 @@ impl PageTable {
 
         let Some(next) = level.next() else {
             return Err(MemoryError::VirtualToPhysical {
-                addr: vaddr.as_u64(),
+                addr: vaddr.as_usize(),
             });
         };
         let child = Self::from_paddr_mut(entry.addr())?;
@@ -153,7 +153,7 @@ fn alloc_zeroed_table() -> Result<PhysicalAddr> {
     }
     vaddr
         .to_physical()
-        .map_err(|_| MemoryError::PointerNotInDirectMap { addr: vaddr.as_u64() })
+        .map_err(|_| MemoryError::PointerNotInDirectMap { addr: vaddr.as_usize() })
 }
 
 fn read_cr3() -> PhysicalAddr {

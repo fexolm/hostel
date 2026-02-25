@@ -95,7 +95,7 @@ impl KmallocAllocator {
     fn free(&mut self, ptr: VirtualAddr) -> Result<()> {
         let phys = ptr
             .to_physical()
-            .map_err(|_| MemoryError::PointerNotInDirectMap { addr: ptr.as_u64() })?;
+            .map_err(|_| MemoryError::PointerNotInDirectMap { addr: ptr.as_usize() })?;
 
         if self.free_small(phys)? {
             return Ok(());
@@ -127,7 +127,7 @@ impl KmallocAllocator {
     }
 
     fn free_small(&mut self, addr: PhysicalAddr) -> Result<bool> {
-        let p = addr.as_u64();
+        let p = addr.as_usize();
 
         for class in &mut self.small {
             for slab in &mut class.slabs {
@@ -135,13 +135,13 @@ impl KmallocAllocator {
                     continue;
                 }
 
-                let start = slab.base.as_u64();
-                let end = start + PAGE_SIZE as u64;
+                let start = slab.base.as_usize();
+                let end = start + PAGE_SIZE;
                 if p < start || p >= end {
                     continue;
                 }
 
-                let block_size = u64::from(slab.block_size);
+                let block_size = slab.block_size as usize;
                 let offset = p - start;
                 if offset % block_size != 0 {
                     return Err(MemoryError::SlabAlignmentMismatch {
@@ -198,7 +198,7 @@ impl KmallocAllocator {
             }
         }
 
-        Err(MemoryError::UnknownAllocation { addr: addr.as_u64() })
+        Err(MemoryError::UnknownAllocation { addr: addr.as_usize() })
     }
 }
 
@@ -336,15 +336,15 @@ mod tests {
         assert_eq!(
             a.to_physical()
                 .unwrap()
-                .as_u64()
-                % PAGE_SIZE as u64,
+                .as_usize()
+                % PAGE_SIZE,
             0
         );
         assert_eq!(
             b.to_physical()
                 .unwrap()
-                .as_u64()
-                % PAGE_SIZE as u64,
+                .as_usize()
+                % PAGE_SIZE,
             0
         );
 
