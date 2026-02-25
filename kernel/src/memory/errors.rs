@@ -32,6 +32,9 @@ pub enum MemoryError {
     #[error("unknown allocation at physical address {addr:#x}")]
     UnknownAllocation { addr: usize },
 
+    #[error("physical page index {page} is out of range")]
+    PhysicalPageOutOfRange { page: usize },
+
     #[error("pointer {addr:#x} does not match slab alignment {block_size}")]
     SlabAlignmentMismatch { addr: usize, block_size: usize },
 
@@ -40,6 +43,9 @@ pub enum MemoryError {
 
     #[error("slab is empty")]
     SlabEmpty,
+
+    #[error("page refcount overflow at physical address {addr:#x}")]
+    PageRefcountOverflow { addr: usize },
 }
 
 pub type Result<T> = core::result::Result<T, MemoryError>;

@@ -4,7 +4,10 @@ use core::ptr::write_bytes;
 
 use crate::memory::{
     address::{PhysicalAddr, VirtualAddr},
-    alloc::kmalloc::{kfree, kmalloc},
+    alloc::{
+        kmalloc::{kfree, kmalloc},
+        palloc::pfree,
+    },
     constants::{DIRECT_MAP_OFFSET, DIRECT_MAP_PML4, PAGE_TABLE_ENTRIES, PAGE_TABLE_SIZE},
     errors::{MemoryError, Result},
 };
@@ -135,6 +138,13 @@ impl PageTable {
                     child.free_level(next)?;
                 }
             }
+        } else {
+            for i in 0..end {
+                let entry = self.entries[i];
+                if entry.is_present() {
+                    pfree(entry.addr())?;
+                }
+            }
         }
 
         kfree(self.self_vaddr())?;
@@ -153,7 +163,9 @@ fn alloc_zeroed_table() -> Result<PhysicalAddr> {
     }
     vaddr
         .to_physical()
-        .map_err(|_| MemoryError::PointerNotInDirectMap { addr: vaddr.as_usize() })
+        .map_err(|_| MemoryError::PointerNotInDirectMap {
+            addr: vaddr.as_usize(),
+        })
 }
 
 fn read_cr3() -> PhysicalAddr {
