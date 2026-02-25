@@ -33,7 +33,7 @@ impl PageTableEntry {
     }
 
     pub fn addr(&self) -> PhysicalAddr {
-        PhysicalAddr::new(self.0 & ADDR_MASK)
+        PhysicalAddr::new((self.0 & ADDR_MASK) as usize)
     }
 }
 
@@ -142,14 +142,14 @@ impl PageTable {
     }
 
     fn self_vaddr(&self) -> VirtualAddr {
-        VirtualAddr::new(self as *const Self as usize as u64)
+        VirtualAddr::new(self as *const Self as usize)
     }
 }
 
 fn alloc_zeroed_table() -> Result<PhysicalAddr> {
-    let vaddr = kmalloc(PAGE_TABLE_SIZE as usize)?;
+    let vaddr = kmalloc(PAGE_TABLE_SIZE)?;
     unsafe {
-        write_bytes(vaddr.as_ptr::<u8>(), 0, PAGE_TABLE_SIZE as usize);
+        write_bytes(vaddr.as_ptr::<u8>(), 0, PAGE_TABLE_SIZE);
     }
     vaddr
         .to_physical()
@@ -161,13 +161,13 @@ fn read_cr3() -> PhysicalAddr {
     unsafe {
         asm!("mov {}, cr3", out(reg) value, options(nostack, preserves_flags));
     }
-    PhysicalAddr::new(value)
+    PhysicalAddr::new(value as usize)
 }
 
 fn index_for(level: PageTableLevel, vaddr: VirtualAddr) -> usize {
     match level {
-        PageTableLevel::Pml4 => vaddr.pml4_index() as usize,
-        PageTableLevel::Pdpt => vaddr.pdpt_index() as usize,
-        PageTableLevel::Pd => vaddr.pd_index() as usize,
+        PageTableLevel::Pml4 => vaddr.pml4_index(),
+        PageTableLevel::Pdpt => vaddr.pdpt_index(),
+        PageTableLevel::Pd => vaddr.pd_index(),
     }
 }

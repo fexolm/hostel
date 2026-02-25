@@ -4,7 +4,7 @@ use crate::memory::{
     errors::{MemoryError, Result},
 };
 
-const BITMAP_SIZE: usize = (MAX_PHYSICAL_ADDR / PAGE_SIZE / 64) as usize;
+const BITMAP_SIZE: usize = MAX_PHYSICAL_ADDR as usize / PAGE_SIZE / 64;
 
 #[repr(align(4096))]
 #[repr(C)]
@@ -16,7 +16,7 @@ impl PageAllocator {
     const fn new() -> Self {
         let mut bitmap = [0u64; BITMAP_SIZE];
         let mut page = 0usize;
-        let reserved_pages = (PALLOC_FIRST_PAGE.as_u64() / PAGE_SIZE) as usize;
+        let reserved_pages = PALLOC_FIRST_PAGE.as_usize() / PAGE_SIZE;
 
         while page < reserved_pages {
             let word = page / 64;
@@ -33,7 +33,7 @@ impl PageAllocator {
             return Err(MemoryError::InvalidPageCount { pages });
         }
 
-        let total_pages = (MAX_PHYSICAL_ADDR / PAGE_SIZE) as usize;
+        let total_pages = MAX_PHYSICAL_ADDR as usize / PAGE_SIZE;
         let mut run_start = 0usize;
         let mut run_len = 0usize;
         let mut page = 0usize;
@@ -52,7 +52,7 @@ impl PageAllocator {
             run_len += 1;
             if run_len == pages {
                 self.mark_pages(run_start, pages, true);
-                return Ok(PhysicalAddr::new(run_start as u64 * PAGE_SIZE));
+                return Ok(PhysicalAddr::new(run_start * PAGE_SIZE));
             }
 
             page += 1;
@@ -66,7 +66,7 @@ impl PageAllocator {
             return Err(MemoryError::InvalidPageCount { pages });
         }
 
-        let page_index = (addr.as_u64() / PAGE_SIZE) as usize;
+        let page_index = addr.as_usize() / PAGE_SIZE;
         self.mark_pages(page_index, pages, false);
         Ok(())
     }
@@ -112,7 +112,7 @@ mod tests {
     fn test_page_allocator() {
         let _guard = ALLOC_TEST_LOCK.lock();
         let mut allocator = PageAllocator::new();
-        let first_page = PALLOC_FIRST_PAGE.as_u64();
+        let first_page = PALLOC_FIRST_PAGE.as_usize();
         let addr1 = allocator.alloc(1).unwrap();
         let addr2 = allocator.alloc(1).unwrap();
         assert_eq!(addr1, PhysicalAddr::new(first_page));

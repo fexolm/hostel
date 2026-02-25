@@ -128,7 +128,7 @@ impl Scheduler {
         let stack_top = stack_base
             .to_virtual()
             .expect("process stack must be direct-map address")
-            .add(PAGE_SIZE * PROCESS_STACK_PAGES as u64);
+            .add(PAGE_SIZE * PROCESS_STACK_PAGES);
 
         let initial_rsp = stack_top.as_u64() - core::mem::size_of::<u64>() as u64;
         unsafe {
@@ -191,7 +191,7 @@ impl Scheduler {
     fn plan_exit_current(&mut self) -> SwitchPlan {
         let current = self.current;
         assert!(current != NO_PROCESS, "no running process to exit");
-        let user_root = PhysicalAddr::new(self.processes[current].context.cr3);
+        let user_root = PhysicalAddr::new(self.processes[current].context.cr3 as usize);
 
         self.processes[current].state = State::Exited;
         self.processes[current].entry = None;

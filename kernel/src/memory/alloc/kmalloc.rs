@@ -85,7 +85,7 @@ impl KmallocAllocator {
     fn alloc(&mut self, size: usize) -> Result<VirtualAddr> {
         let class_size = size_to_class(size)?;
 
-        if (class_size as u64) <= PAGE_SIZE {
+        if class_size <= PAGE_SIZE {
             self.alloc_small(class_size as u32)
         } else {
             self.alloc_large(class_size)
@@ -136,7 +136,7 @@ impl KmallocAllocator {
                 }
 
                 let start = slab.base.as_u64();
-                let end = start + PAGE_SIZE;
+                let end = start + PAGE_SIZE as u64;
                 if p < start || p >= end {
                     continue;
                 }
@@ -171,7 +171,7 @@ impl KmallocAllocator {
     }
 
     fn alloc_large(&mut self, class_size: usize) -> Result<VirtualAddr> {
-        let pages = class_size.div_ceil(PAGE_SIZE as usize);
+        let pages = class_size.div_ceil(PAGE_SIZE);
         let base = palloc(pages)?;
 
         for slot in &mut self.large {
@@ -230,7 +230,7 @@ fn size_to_class(size: usize) -> Result<usize> {
 
 fn init_small_slab(slab: &mut SmallSlab, block_size: u32) -> Result<()> {
     let base = palloc(1)?;
-    let capacity = (PAGE_SIZE as u32) / block_size;
+    let capacity = PAGE_SIZE as u32 / block_size;
     if capacity == 0 {
         return Err(MemoryError::InvalidSlabCapacity);
     }
@@ -270,13 +270,13 @@ fn alloc_from_small_slab(slab: &mut SmallSlab) -> Result<VirtualAddr> {
     slab.free_head = next;
     slab.free_count -= 1;
 
-    let offset = idx as u64 * slab.block_size as u64;
+    let offset = idx as usize * slab.block_size as usize;
     slab.base.add(offset).to_virtual()
 }
 
 unsafe fn small_slab_link_ptr(slab: &SmallSlab, idx: u32) -> *mut u32 {
-    let addr = slab.base.as_u64() + idx as u64 * slab.block_size as u64;
-    VirtualAddr::new(DIRECT_MAP_OFFSET.as_u64() + addr).as_ptr::<u32>()
+    let addr = slab.base.as_usize() + idx as usize * slab.block_size as usize;
+    VirtualAddr::new(DIRECT_MAP_OFFSET.as_usize() + addr).as_ptr::<u32>()
 }
 
 static KMALLOC: spin::Mutex<KmallocAllocator> = spin::Mutex::new(KmallocAllocator::new());
@@ -337,14 +337,14 @@ mod tests {
             a.to_physical()
                 .unwrap()
                 .as_u64()
-                % PAGE_SIZE,
+                % PAGE_SIZE as u64,
             0
         );
         assert_eq!(
             b.to_physical()
                 .unwrap()
                 .as_u64()
-                % PAGE_SIZE,
+                % PAGE_SIZE as u64,
             0
         );
 
