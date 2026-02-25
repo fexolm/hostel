@@ -160,7 +160,7 @@ impl KmallocAllocator {
                 if slab.free_count == slab.capacity {
                     let base = slab.base;
                     *slab = SmallSlab::empty();
-                    pfree(base, 1)?;
+                    pfree(base)?;
                 }
 
                 return Ok(true);
@@ -185,14 +185,18 @@ impl KmallocAllocator {
             }
         }
 
-        pfree(base, pages)?;
+        for page in 0..pages {
+            pfree(base.add(page * PAGE_SIZE))?;
+        }
         Err(MemoryError::TooManyLargeAllocations)
     }
 
     fn free_large(&mut self, addr: PhysicalAddr) -> Result<()> {
         for slot in &mut self.large {
             if slot.in_use && slot.base == addr {
-                pfree(slot.base, slot.pages)?;
+                for page in 0..slot.pages {
+                    pfree(slot.base.add(page * PAGE_SIZE))?;
+                }
                 *slot = LargeAlloc::empty();
                 return Ok(());
             }
