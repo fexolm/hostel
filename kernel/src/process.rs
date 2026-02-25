@@ -9,7 +9,7 @@ use crate::memory::{
 };
 
 const MAX_PROCESSES: usize = 8;
-const PROCESS_STACK_PAGES: u64 = 1;
+const PROCESS_STACK_PAGES: usize = 1;
 const NO_PROCESS: usize = usize::MAX;
 pub type ProcessFn = fn();
 
@@ -78,7 +78,7 @@ struct Process {
     context: Context,
     entry: Option<ProcessFn>,
     _stack_base: PhysicalAddr,
-    _stack_pages: u64,
+    _stack_pages: usize,
 }
 
 impl Process {
@@ -130,9 +130,12 @@ impl Scheduler {
             .expect("process stack must be direct-map address")
             .add(PAGE_SIZE * PROCESS_STACK_PAGES);
 
-        let initial_rsp = stack_top.as_u64() - core::mem::size_of::<u64>() as u64;
+        let initial_rsp = stack_top.as_u64()
+            - u64::try_from(core::mem::size_of::<u64>()).expect("size fits u64");
         unsafe {
-            *(initial_rsp as usize as *mut u64) = process_trampoline as *const () as usize as u64;
+            *(usize::try_from(initial_rsp).expect("rsp fits usize") as *mut u64) =
+                u64::try_from(process_trampoline as *const () as usize)
+                    .expect("fn ptr fits u64");
         }
 
         let pid = self.next_pid;
@@ -191,7 +194,7 @@ impl Scheduler {
     fn plan_exit_current(&mut self) -> SwitchPlan {
         let current = self.current;
         assert!(current != NO_PROCESS, "no running process to exit");
-        let user_root = PhysicalAddr::new(self.processes[current].context.cr3);
+        let user_root = PhysicalAddr::new(usize::try_from(self.processes[current].context.cr3).expect("cr3 fits usize"));
 
         self.processes[current].state = State::Exited;
         self.processes[current].entry = None;

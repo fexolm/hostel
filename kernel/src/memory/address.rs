@@ -3,29 +3,33 @@ use core::fmt::Display;
 use crate::memory::errors::{MemoryError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PhysicalAddr(u64);
+pub struct PhysicalAddr(usize);
 
 impl PhysicalAddr {
-    pub const fn new(addr: u64) -> Self {
-        Self(addr & !0xFFF)
+    pub const fn new(addr: usize) -> Self {
+        Self(addr & !0xFFFusize)
     }
 
     pub const fn as_u64(self) -> u64 {
+        self.0 as u64
+    }
+
+    pub const fn as_usize(self) -> usize {
         self.0
     }
 
-    pub const fn add(self, offset: u64) -> PhysicalAddr {
+    pub const fn add(self, offset: usize) -> PhysicalAddr {
         PhysicalAddr(self.0 + offset)
     }
 
-    pub const fn align_up(self, align: u64) -> PhysicalAddr {
+    pub const fn align_up(self, align: usize) -> PhysicalAddr {
         assert!(align.is_power_of_two());
         PhysicalAddr((self.0 + align - 1) & !(align - 1))
     }
 
     pub const fn to_virtual(self) -> Result<VirtualAddr> {
         if self.0 > crate::memory::constants::MAX_PHYSICAL_ADDR {
-            Err(MemoryError::PhysicalToVirtual { addr: self.0 })
+            Err(MemoryError::PhysicalToVirtual { addr: self.0 as u64 })
         } else {
             Ok(VirtualAddr(
                 self.0 + crate::memory::constants::DIRECT_MAP_OFFSET.0,
@@ -41,18 +45,22 @@ impl Display for PhysicalAddr {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct VirtualAddr(u64);
+pub struct VirtualAddr(usize);
 
 impl VirtualAddr {
-    pub const fn new(addr: u64) -> Self {
+    pub const fn new(addr: usize) -> Self {
         Self(addr)
     }
 
     pub const fn as_u64(self) -> u64 {
+        self.0 as u64
+    }
+
+    pub const fn as_usize(self) -> usize {
         self.0
     }
 
-    pub const fn add(self, offset: u64) -> VirtualAddr {
+    pub const fn add(self, offset: usize) -> VirtualAddr {
         VirtualAddr(self.0 + offset)
     }
 
@@ -62,7 +70,7 @@ impl VirtualAddr {
                 > crate::memory::constants::DIRECT_MAP_OFFSET.0
                     + crate::memory::constants::MAX_PHYSICAL_ADDR
         {
-            Err(MemoryError::VirtualToPhysical { addr: self.0 })
+            Err(MemoryError::VirtualToPhysical { addr: self.0 as u64 })
         } else {
             Ok(PhysicalAddr(
                 self.0 - crate::memory::constants::DIRECT_MAP_OFFSET.0,
@@ -70,24 +78,24 @@ impl VirtualAddr {
         }
     }
 
-    pub const fn pml4_index(self) -> u64 {
+    pub const fn pml4_index(self) -> usize {
         (self.0 >> 39) & 0x1FF
     }
 
-    pub const fn pdpt_index(self) -> u64 {
+    pub const fn pdpt_index(self) -> usize {
         (self.0 >> 30) & 0x1FF
     }
 
-    pub const fn pd_index(self) -> u64 {
+    pub const fn pd_index(self) -> usize {
         (self.0 >> 21) & 0x1FF
     }
 
     pub const fn as_ptr<T>(self) -> *mut T {
-        self.0 as usize as *mut T
+        self.0 as *mut T
     }
 
     pub unsafe fn as_ref_mut<'i, T>(self) -> &'i mut T {
-        debug_assert!(self.0 as usize % core::mem::align_of::<T>() == 0);
+        debug_assert!(self.0 % core::mem::align_of::<T>() == 0);
         unsafe { &mut *self.as_ptr() }
     }
 }

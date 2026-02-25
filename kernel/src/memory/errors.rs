@@ -9,7 +9,7 @@ pub enum MemoryError {
     PhysicalToVirtual { addr: u64 },
 
     #[error("invalid page count: {pages}")]
-    InvalidPageCount { pages: u64 },
+    InvalidPageCount { pages: usize },
 
     #[error("out of memory")]
     OutOfMemory,

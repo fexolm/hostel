@@ -14,7 +14,7 @@ const WRITABLE: u64 = 1 << 1;
 const USER_ACCESSIBLE: u64 = 1 << 2;
 const HUGE_PAGE: u64 = 1 << 7;
 const ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
-const USER_PML4_LIMIT: usize = DIRECT_MAP_OFFSET.pml4_index() as usize;
+const USER_PML4_LIMIT: usize = DIRECT_MAP_OFFSET.pml4_index();
 
 #[derive(Clone, Copy)]
 pub struct PageTableEntry(u64);
@@ -33,7 +33,7 @@ impl PageTableEntry {
     }
 
     pub fn addr(&self) -> PhysicalAddr {
-        PhysicalAddr::new(self.0 & ADDR_MASK)
+        PhysicalAddr::new(usize::try_from(self.0 & ADDR_MASK).expect("masked addr fits usize"))
     }
 }
 
@@ -56,7 +56,7 @@ impl PageTableLevel {
 
 #[repr(C, align(4096))]
 pub struct PageTable {
-    entries: [PageTableEntry; PAGE_TABLE_ENTRIES as usize],
+    entries: [PageTableEntry; PAGE_TABLE_ENTRIES],
 }
 
 impl PageTable {
@@ -82,7 +82,7 @@ impl PageTable {
             copy_nonoverlapping(
                 kernel.entries.as_ptr().add(USER_PML4_LIMIT),
                 pml4.entries.as_mut_ptr().add(USER_PML4_LIMIT),
-                PAGE_TABLE_ENTRIES as usize - USER_PML4_LIMIT,
+                PAGE_TABLE_ENTRIES - USER_PML4_LIMIT,
             );
         }
 
@@ -124,7 +124,7 @@ impl PageTable {
         let end = if level == PageTableLevel::Pml4 {
             USER_PML4_LIMIT
         } else {
-            PAGE_TABLE_ENTRIES as usize
+            PAGE_TABLE_ENTRIES
         };
 
         if let Some(next) = level.next() {
@@ -142,14 +142,14 @@ impl PageTable {
     }
 
     fn self_vaddr(&self) -> VirtualAddr {
-        VirtualAddr::new(self as *const Self as usize as u64)
+        VirtualAddr::new(self as *const Self as usize)
     }
 }
 
 fn alloc_zeroed_table() -> Result<PhysicalAddr> {
-    let vaddr = kmalloc(PAGE_TABLE_SIZE as usize)?;
+    let vaddr = kmalloc(PAGE_TABLE_SIZE)?;
     unsafe {
-        write_bytes(vaddr.as_ptr::<u8>(), 0, PAGE_TABLE_SIZE as usize);
+        write_bytes(vaddr.as_ptr::<u8>(), 0, PAGE_TABLE_SIZE);
     }
     vaddr
         .to_physical()
@@ -161,13 +161,13 @@ fn read_cr3() -> PhysicalAddr {
     unsafe {
         asm!("mov {}, cr3", out(reg) value, options(nostack, preserves_flags));
     }
-    PhysicalAddr::new(value)
+    PhysicalAddr::new(usize::try_from(value).expect("cr3 fits usize"))
 }
 
 fn index_for(level: PageTableLevel, vaddr: VirtualAddr) -> usize {
     match level {
-        PageTableLevel::Pml4 => vaddr.pml4_index() as usize,
-        PageTableLevel::Pdpt => vaddr.pdpt_index() as usize,
-        PageTableLevel::Pd => vaddr.pd_index() as usize,
+        PageTableLevel::Pml4 => vaddr.pml4_index(),
+        PageTableLevel::Pdpt => vaddr.pdpt_index(),
+        PageTableLevel::Pd => vaddr.pd_index(),
     }
 }
