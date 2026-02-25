@@ -1,7 +1,7 @@
 use crate::memory::address::{PhysicalAddr, VirtualAddr};
 
 pub const PAGE_SIZE: usize = 2 << 20;
-pub const MAX_PHYSICAL_ADDR: usize = 0x0000_00FF_FFFF_FFFF;
+pub const MAX_PHYSICAL_ADDR: usize = 0x0000_000F_FFFF_FFFF;
 
 pub const PAGE_TABLE_ENTRIES: usize = 512;
 pub const PAGE_TABLE_SIZE: usize = 8 * PAGE_TABLE_ENTRIES;
@@ -21,11 +21,11 @@ pub const DIRECT_MAP_PML4_ENTRIES_COUNT: usize =
 
 pub const DIRECT_MAP_PDPT: PhysicalAddr = DIRECT_MAP_PML4.add(PAGE_TABLE_SIZE);
 pub const DIRECT_MAP_PDPT_COUNT: usize =
-    MAX_PHYSICAL_ADDR / (PAGE_SIZE * PAGE_TABLE_ENTRIES * PAGE_TABLE_ENTRIES);
+    (MAX_PHYSICAL_ADDR + 1).div_ceil(PAGE_SIZE * PAGE_TABLE_ENTRIES * PAGE_TABLE_ENTRIES);
 pub const DIRECT_MAP_PD: PhysicalAddr =
     DIRECT_MAP_PDPT.add(DIRECT_MAP_PDPT_COUNT * PAGE_TABLE_SIZE);
 pub const DIRECT_MAP_PD_COUNT: usize =
-    MAX_PHYSICAL_ADDR / (PAGE_SIZE * PAGE_TABLE_ENTRIES);
+    (MAX_PHYSICAL_ADDR + 1).div_ceil(PAGE_SIZE * PAGE_TABLE_ENTRIES);
 
 // pdpd and pd for the kernel code (we need to reserver 2gb of virtual address space for kernel code, for code-model=kernel)
 pub const KERNEL_CODE_PDPD: PhysicalAddr =
