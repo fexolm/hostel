@@ -33,7 +33,7 @@ impl PageTableEntry {
     }
 
     pub fn addr(&self) -> PhysicalAddr {
-        PhysicalAddr::new(usize::try_from(self.0 & ADDR_MASK).expect("masked addr fits usize"))
+        PhysicalAddr::new((self.0 & ADDR_MASK) as usize)
     }
 }
 
@@ -161,7 +161,7 @@ fn read_cr3() -> PhysicalAddr {
     unsafe {
         asm!("mov {}, cr3", out(reg) value, options(nostack, preserves_flags));
     }
-    PhysicalAddr::new(usize::try_from(value).expect("cr3 fits usize"))
+    PhysicalAddr::new(value as usize)
 }
 
 fn index_for(level: PageTableLevel, vaddr: VirtualAddr) -> usize {

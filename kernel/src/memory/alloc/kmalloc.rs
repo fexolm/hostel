@@ -7,8 +7,8 @@ use crate::memory::{
 
 const MIN_SHIFT: u32 = 10; // 1 KiB
 const MAX_SHIFT: u32 = 24; // 16 MiB
-const MIN_ALLOC_SIZE: usize = 1usize << MIN_SHIFT;
-const MAX_ALLOC_SIZE: usize = 1usize << MAX_SHIFT;
+const MIN_ALLOC_SIZE: usize = 1 << MIN_SHIFT;
+const MAX_ALLOC_SIZE: usize = 1 << MAX_SHIFT;
 const SMALL_CLASS_COUNT: usize = 12; // 1 KiB .. 2 MiB
 const MAX_SLABS_PER_CLASS: usize = 128;
 const MAX_LARGE_ALLOCS: usize = 256;
@@ -105,7 +105,7 @@ impl KmallocAllocator {
     }
 
     fn alloc_small(&mut self, block_size: u32) -> Result<VirtualAddr> {
-        let class_idx = usize::try_from(block_size.trailing_zeros() - MIN_SHIFT).expect("class index fits usize");
+        let class_idx = (block_size.trailing_zeros() - MIN_SHIFT) as usize;
         let class = &mut self.small[class_idx];
 
         for slab in &mut class.slabs {
@@ -136,7 +136,7 @@ impl KmallocAllocator {
                 }
 
                 let start = slab.base.as_u64();
-                let end = start + u64::try_from(PAGE_SIZE).expect("PAGE_SIZE fits u64");
+                let end = start + PAGE_SIZE as u64;
                 if p < start || p >= end {
                     continue;
                 }
@@ -270,15 +270,12 @@ fn alloc_from_small_slab(slab: &mut SmallSlab) -> Result<VirtualAddr> {
     slab.free_head = next;
     slab.free_count -= 1;
 
-    let offset = usize::try_from(idx).expect("slab index fits usize")
-        * usize::try_from(slab.block_size).expect("block size fits usize");
+    let offset = idx as usize * slab.block_size as usize;
     slab.base.add(offset).to_virtual()
 }
 
 unsafe fn small_slab_link_ptr(slab: &SmallSlab, idx: u32) -> *mut u32 {
-    let addr = slab.base.as_usize()
-        + usize::try_from(idx).expect("slab index fits usize")
-            * usize::try_from(slab.block_size).expect("block size fits usize");
+    let addr = slab.base.as_usize() + idx as usize * slab.block_size as usize;
     VirtualAddr::new(DIRECT_MAP_OFFSET.as_usize() + addr).as_ptr::<u32>()
 }
 
@@ -310,7 +307,7 @@ mod tests {
     fn class_boundaries_are_powers_of_two() {
         let _guard = ALLOC_TEST_LOCK.lock();
         for shift in MIN_SHIFT..=MAX_SHIFT {
-            let class = 1usize << shift;
+            let class = 1 << shift;
             assert_eq!(size_to_class(class - 1).unwrap(), class);
             assert_eq!(size_to_class(class).unwrap(), class);
             if shift < MAX_SHIFT {
@@ -340,14 +337,14 @@ mod tests {
             a.to_physical()
                 .unwrap()
                 .as_u64()
-                % u64::try_from(PAGE_SIZE).expect("PAGE_SIZE fits u64"),
+                % PAGE_SIZE as u64,
             0
         );
         assert_eq!(
             b.to_physical()
                 .unwrap()
                 .as_u64()
-                % u64::try_from(PAGE_SIZE).expect("PAGE_SIZE fits u64"),
+                % PAGE_SIZE as u64,
             0
         );
 

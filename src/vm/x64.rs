@@ -36,11 +36,6 @@ const SS_TYPE: u8 = 0x3;
 
 pub const GUEST_BASE: GuestAddress = GuestAddress(0);
 
-fn u64_from_usize(value: usize) -> u64 {
-    u64::try_from(value).expect("usize value fits u64")
-}
-
-
 pub fn init_x64(
     vm: &VmFd,
     vcpus: &[kvm_ioctls::VcpuFd],
@@ -50,44 +45,44 @@ pub fn init_x64(
     // map direct map region
     for i in 0..DIRECT_MAP_PML4_ENTRIES_COUNT {
         let entry_val =
-            (DIRECT_MAP_PDPT.as_u64() + u64_from_usize(i) * u64_from_usize(PAGE_TABLE_SIZE)) | PTE_PRESENT | PTE_RW;
+            (DIRECT_MAP_PDPT.as_u64() + i as u64 * PAGE_TABLE_SIZE as u64) | PTE_PRESENT | PTE_RW;
         let entry_addr =
-            GuestAddress(DIRECT_MAP_PML4.as_u64() + u64_from_usize((DIRECT_MAP_PML4_OFFSET + i) * 8));
+            GuestAddress(DIRECT_MAP_PML4.as_u64() + ((DIRECT_MAP_PML4_OFFSET + i) * 8) as u64);
         boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
     }
 
     for i in 0..DIRECT_MAP_PDPT_COUNT * PAGE_TABLE_ENTRIES {
-        let pd_phys = DIRECT_MAP_PD.as_u64() + u64_from_usize(i) * u64_from_usize(PAGE_TABLE_SIZE);
+        let pd_phys = DIRECT_MAP_PD.as_u64() + i as u64 * PAGE_TABLE_SIZE as u64;
         let entry_val = pd_phys | PTE_PRESENT | PTE_RW;
-        let entry_addr = GuestAddress(DIRECT_MAP_PDPT.as_u64() + u64_from_usize(i * 8));
+        let entry_addr = GuestAddress(DIRECT_MAP_PDPT.as_u64() + (i * 8) as u64);
         boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
     }
 
     for i in 0..DIRECT_MAP_PD_COUNT * PAGE_TABLE_ENTRIES {
-        let phys = u64_from_usize(i) * u64_from_usize(PAGE_SIZE);
+        let phys = i as u64 * PAGE_SIZE as u64;
         let entry_val = phys | PTE_PRESENT | PTE_RW | PTE_PS;
-        let entry_addr = GuestAddress(DIRECT_MAP_PD.as_u64() + u64_from_usize(i * 8));
+        let entry_addr = GuestAddress(DIRECT_MAP_PD.as_u64() + (i * 8) as u64);
         boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
     }
 
     // map kernel code region
     let kernel_pml4_val = KERNEL_CODE_PDPD.as_u64() | PTE_PRESENT | PTE_RW;
     let kernel_pml4_addr =
-        GuestAddress(DIRECT_MAP_PML4.as_u64() + u64_from_usize(KERNEL_CODE_VIRT.pml4_index() * 8));
+        GuestAddress(DIRECT_MAP_PML4.as_u64() + (KERNEL_CODE_VIRT.pml4_index() * 8) as u64);
     boot_mem.write_slice(&kernel_pml4_val.to_le_bytes(), kernel_pml4_addr)?;
 
     for i in 0..2 {
-        let pd_phys = KERNEL_CODE_PD.as_u64() + (u64_from_usize(i) * u64_from_usize(PAGE_TABLE_SIZE));
+        let pd_phys = KERNEL_CODE_PD.as_u64() + (i as u64 * PAGE_TABLE_SIZE as u64);
         let entry_val = pd_phys | PTE_PRESENT | PTE_RW;
         let entry_addr =
-            GuestAddress(KERNEL_CODE_PDPD.as_u64() + u64_from_usize((KERNEL_CODE_VIRT.pdpt_index() + i) * 8));
+            GuestAddress(KERNEL_CODE_PDPD.as_u64() + ((KERNEL_CODE_VIRT.pdpt_index() + i) * 8) as u64);
         boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
     }
 
     for i in 0..PAGE_TABLE_ENTRIES {
         let phys = KERNEL_CODE_PHYS.add(i * PAGE_SIZE).as_u64();
         let entry_val = phys | PTE_PRESENT | PTE_RW | PTE_PS;
-        let entry_addr = GuestAddress(KERNEL_CODE_PD.as_u64() + u64_from_usize(i * 8));
+        let entry_addr = GuestAddress(KERNEL_CODE_PD.as_u64() + (i * 8) as u64);
         boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
     }
 
@@ -96,8 +91,8 @@ pub fn init_x64(
         vm.set_user_memory_region(kvm_userspace_memory_region {
             slot: 0,
             guest_phys_addr: GUEST_BASE.0,
-            memory_size: u64_from_usize(mem_size),
-            userspace_addr: u64_from_usize(boot_mem.get_host_address(GUEST_BASE).unwrap() as usize),
+            memory_size: mem_size as u64,
+            userspace_addr: boot_mem.get_host_address(GUEST_BASE).unwrap() as u64,
             flags: 0,
         })?;
     }

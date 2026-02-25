@@ -14,8 +14,8 @@ struct PageAllocator {
 
 impl PageAllocator {
     const fn new() -> Self {
-        let mut bitmap = [0u64; BITMAP_SIZE];
-        let mut page = 0usize;
+        let mut bitmap = [0; BITMAP_SIZE];
+        let mut page = 0;
         let reserved_pages = PALLOC_FIRST_PAGE.as_usize() / PAGE_SIZE;
 
         while page < reserved_pages {
@@ -34,9 +34,9 @@ impl PageAllocator {
         }
 
         let total_pages = MAX_PHYSICAL_ADDR / PAGE_SIZE;
-        let mut run_start = 0usize;
-        let mut run_len = 0usize;
-        let mut page = 0usize;
+        let mut run_start = 0;
+        let mut run_len = 0;
+        let mut page = 0;
 
         while page < total_pages {
             if self.is_page_used(page) {

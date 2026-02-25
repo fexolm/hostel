@@ -27,7 +27,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 }
 
 fn task_a() {
-    let mut i = 0u64;
+    let mut i = 0;
     while i < 5 {
         kernel::println!("task A (pid={}): tick {}", process::current_pid(), i);
         i += 1;
@@ -37,7 +37,7 @@ fn task_a() {
 }
 
 fn task_b() {
-    let mut i = 0u64;
+    let mut i = 0;
     while i < 5 {
         kernel::println!("task B (pid={}): tick {}", process::current_pid(), i);
         i += 1;
