@@ -234,8 +234,7 @@ impl Scheduler {
     }
 
     fn find_next_ready(&self, current: usize) -> Option<usize> {
-        let mut i = 0;
-        while i < MAX_PROCESSES {
+        for i in 0..MAX_PROCESSES {
             let idx = if current == NO_PROCESS {
                 i
             } else {
@@ -244,7 +243,6 @@ impl Scheduler {
             if self.processes[idx].state == State::Ready {
                 return Some(idx);
             }
-            i += 1;
         }
         None
     }

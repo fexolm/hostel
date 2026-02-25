@@ -37,6 +37,10 @@ impl PageAllocator {
             return Err(MemoryError::InvalidPageCount { pages });
         }
 
+        if pages > PAGE_COUNT {
+            return Err(MemoryError::OutOfMemory);
+        }
+
         let mut run_start = 0;
         let mut run_len = 0;
 
@@ -74,7 +78,18 @@ impl PageAllocator {
 
     fn share(&mut self, addr: PhysicalAddr) -> Result<()> {
         let page = addr.as_usize() / PAGE_SIZE;
-        if self.refcounts[page] == u8::MAX {
+        if page >= PAGE_COUNT {
+            return Err(MemoryError::PhysicalPageOutOfRange { page });
+        }
+
+        let refs = self.refcounts[page];
+        if refs == 0 {
+            return Err(MemoryError::UnknownAllocation {
+                addr: page * PAGE_SIZE,
+            });
+        }
+
+        if refs == u8::MAX {
             return Err(MemoryError::PageRefcountOverflow {
                 addr: page * PAGE_SIZE,
             });
@@ -101,6 +116,22 @@ impl PageAllocator {
             }
         }
     }
+}
+
+fn range_end_page(start_page: usize, pages: usize) -> Result<usize> {
+    let end_page = start_page
+        .checked_add(pages)
+        .ok_or(MemoryError::PhysicalPageOutOfRange { page: start_page })?;
+
+    if start_page >= PAGE_COUNT {
+        return Err(MemoryError::PhysicalPageOutOfRange { page: start_page });
+    }
+
+    if end_page > PAGE_COUNT {
+        return Err(MemoryError::PhysicalPageOutOfRange { page: end_page - 1 });
+    }
+
+    Ok(end_page)
 }
 
 static PAGE_ALLOCATOR: spin::Mutex<PageAllocator> = spin::Mutex::new(PageAllocator::new());
@@ -156,6 +187,19 @@ mod tests {
         assert_eq!(
             reused, base,
             "page must be reusable after last reference drop"
+        );
+    }
+
+    #[test]
+    fn test_share_requires_allocated_page() {
+        let _guard = ALLOC_TEST_LOCK.lock();
+        let mut allocator = PageAllocator::new();
+        let addr = PhysicalAddr::new(PALLOC_FIRST_PAGE.as_usize());
+        assert_eq!(
+            allocator.share(addr),
+            Err(MemoryError::UnknownAllocation {
+                addr: PALLOC_FIRST_PAGE.as_usize(),
+            })
         );
     }
 }
