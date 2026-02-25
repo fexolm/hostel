@@ -43,26 +43,25 @@ pub fn init_x64(
     mem_size: usize,
 ) -> Result<()> {
     // map direct map region
-    for i in 0..DIRECT_MAP_PML4_ENTRIES_COUNT as usize {
+    for i in 0..DIRECT_MAP_PML4_ENTRIES_COUNT {
         let entry_val =
-            (DIRECT_MAP_PDPT.as_u64() + (i as u64) * PAGE_TABLE_SIZE) | PTE_PRESENT | PTE_RW;
+            (DIRECT_MAP_PDPT.as_u64() + i as u64 * PAGE_TABLE_SIZE) | PTE_PRESENT | PTE_RW;
         let entry_addr =
-            GuestAddress(DIRECT_MAP_PML4.as_u64() + (DIRECT_MAP_PML4_OFFSET + (i as u64) * 8));
+            GuestAddress(DIRECT_MAP_PML4.as_u64() + ((DIRECT_MAP_PML4_OFFSET + i) * 8) as u64);
         boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
     }
 
     for i in 0..DIRECT_MAP_PDPT_COUNT * PAGE_TABLE_ENTRIES {
-        let i64 = i as u64;
-        let pd_phys = DIRECT_MAP_PD.as_u64() + i64 * PAGE_TABLE_SIZE;
+        let pd_phys = DIRECT_MAP_PD.as_u64() + i as u64 * PAGE_TABLE_SIZE;
         let entry_val = pd_phys | PTE_PRESENT | PTE_RW;
-        let entry_addr = GuestAddress(DIRECT_MAP_PDPT.as_u64() + i64 * 8);
+        let entry_addr = GuestAddress(DIRECT_MAP_PDPT.as_u64() + (i * 8) as u64);
         boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
     }
 
     for i in 0..DIRECT_MAP_PD_COUNT * PAGE_TABLE_ENTRIES {
         let phys = i as u64 * PAGE_SIZE;
         let entry_val = phys | PTE_PRESENT | PTE_RW | PTE_PS;
-        let entry_addr = GuestAddress(DIRECT_MAP_PD.as_u64() + i as u64 * 8);
+        let entry_addr = GuestAddress(DIRECT_MAP_PD.as_u64() + (i * 8) as u64);
         boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
     }
 
@@ -81,9 +80,9 @@ pub fn init_x64(
     }
 
     for i in 0..PAGE_TABLE_ENTRIES {
-        let phys = KERNEL_CODE_PHYS.add(i * PAGE_SIZE).as_u64();
+        let phys = KERNEL_CODE_PHYS.add(i as u64 * PAGE_SIZE).as_u64();
         let entry_val = phys | PTE_PRESENT | PTE_RW | PTE_PS;
-        let entry_addr = GuestAddress(KERNEL_CODE_PD.as_u64() + i * 8);
+        let entry_addr = GuestAddress(KERNEL_CODE_PD.as_u64() + (i * 8) as u64);
         boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
     }
 

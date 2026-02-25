@@ -56,7 +56,7 @@ impl PageTableLevel {
 
 #[repr(C, align(4096))]
 pub struct PageTable {
-    entries: [PageTableEntry; PAGE_TABLE_ENTRIES as usize],
+    entries: [PageTableEntry; PAGE_TABLE_ENTRIES],
 }
 
 impl PageTable {
@@ -82,7 +82,7 @@ impl PageTable {
             copy_nonoverlapping(
                 kernel.entries.as_ptr().add(USER_PML4_LIMIT),
                 pml4.entries.as_mut_ptr().add(USER_PML4_LIMIT),
-                PAGE_TABLE_ENTRIES as usize - USER_PML4_LIMIT,
+                PAGE_TABLE_ENTRIES - USER_PML4_LIMIT,
             );
         }
 
@@ -124,7 +124,7 @@ impl PageTable {
         let end = if level == PageTableLevel::Pml4 {
             USER_PML4_LIMIT
         } else {
-            PAGE_TABLE_ENTRIES as usize
+            PAGE_TABLE_ENTRIES
         };
 
         if let Some(next) = level.next() {

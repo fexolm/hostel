@@ -9,7 +9,7 @@ use crate::memory::{
 };
 
 const MAX_PROCESSES: usize = 8;
-const PROCESS_STACK_PAGES: u64 = 1;
+const PROCESS_STACK_PAGES: usize = 1;
 const NO_PROCESS: usize = usize::MAX;
 pub type ProcessFn = fn();
 
@@ -78,7 +78,7 @@ struct Process {
     context: Context,
     entry: Option<ProcessFn>,
     _stack_base: PhysicalAddr,
-    _stack_pages: u64,
+    _stack_pages: usize,
 }
 
 impl Process {
@@ -128,7 +128,7 @@ impl Scheduler {
         let stack_top = stack_base
             .to_virtual()
             .expect("process stack must be direct-map address")
-            .add(PAGE_SIZE * PROCESS_STACK_PAGES);
+            .add(PAGE_SIZE * PROCESS_STACK_PAGES as u64);
 
         let initial_rsp = stack_top.as_u64() - core::mem::size_of::<u64>() as u64;
         unsafe {

@@ -56,7 +56,7 @@ impl SmallClass {
 struct LargeAlloc {
     in_use: bool,
     base: PhysicalAddr,
-    pages: u64,
+    pages: usize,
 }
 
 impl LargeAlloc {
@@ -83,9 +83,9 @@ impl KmallocAllocator {
     }
 
     fn alloc(&mut self, size: usize) -> Result<VirtualAddr> {
-        let class_size = size_to_class(size)? as u64;
+        let class_size = size_to_class(size)?;
 
-        if class_size <= PAGE_SIZE {
+        if (class_size as u64) <= PAGE_SIZE {
             self.alloc_small(class_size as u32)
         } else {
             self.alloc_large(class_size)
@@ -170,8 +170,8 @@ impl KmallocAllocator {
         Ok(false)
     }
 
-    fn alloc_large(&mut self, class_size: u64) -> Result<VirtualAddr> {
-        let pages = class_size / PAGE_SIZE;
+    fn alloc_large(&mut self, class_size: usize) -> Result<VirtualAddr> {
+        let pages = class_size.div_ceil(PAGE_SIZE as usize);
         let base = palloc(pages)?;
 
         for slot in &mut self.large {
@@ -372,7 +372,7 @@ mod tests {
 
         assert_ne!(a_phys, b_phys);
         let diff = a_phys.abs_diff(b_phys);
-        assert!(diff >= (1 << 22) as u64);
+        assert!(diff >= (1 << 22));
     }
 
     #[test]
