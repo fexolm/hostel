@@ -3,7 +3,7 @@ use core::ptr::{null, null_mut};
 
 use crate::memory::{
     address::PhysicalAddr,
-    alloc::palloc::palloc,
+    alloc::palloc::{palloc, pfree},
     constants::PAGE_SIZE,
     pagetable::PageTable,
 };
@@ -192,14 +192,22 @@ impl Scheduler {
         let current = self.current;
         assert!(current != NO_PROCESS, "no running process to exit");
         let user_root = PhysicalAddr::new(self.processes[current].context.cr3 as usize);
+        let stack_base = self.processes[current]._stack_base;
+        let stack_pages = self.processes[current]._stack_pages;
 
         self.processes[current].state = State::Exited;
         self.processes[current].entry = None;
         self.processes[current].context.cr3 = 0;
+        self.processes[current]._stack_base = PhysicalAddr::new(0);
+        self.processes[current]._stack_pages = 0;
 
         if user_root.as_u64() != 0 {
             let root = PageTable::from_paddr_mut(user_root).expect("valid user root page table");
             root.free().expect("free user page table tree");
+        }
+
+        for page in 0..stack_pages {
+            pfree(stack_base.add(PAGE_SIZE * page)).expect("free process stack");
         }
 
         if let Some(next) = self.find_next_ready(current) {

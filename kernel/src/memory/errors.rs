@@ -40,6 +40,9 @@ pub enum MemoryError {
 
     #[error("slab is empty")]
     SlabEmpty,
+
+    #[error("page refcount overflow at physical address {addr:#x}")]
+    PageRefcountOverflow { addr: usize },
 }
 
 pub type Result<T> = core::result::Result<T, MemoryError>;
