@@ -61,13 +61,9 @@ impl PageAllocator {
         Err(MemoryError::OutOfMemory)
     }
 
-    fn free(&mut self, addr: PhysicalAddr, pages: usize) -> Result<()> {
-        if pages == 0 {
-            return Err(MemoryError::InvalidPageCount { pages });
-        }
-
+    fn free(&mut self, addr: PhysicalAddr) -> Result<()> {
         let page_index = addr.as_usize() / PAGE_SIZE;
-        self.mark_pages(page_index, pages, false);
+        self.mark_pages(page_index, 1, false);
         Ok(())
     }
 
@@ -99,8 +95,8 @@ pub fn palloc(pages: usize) -> Result<PhysicalAddr> {
     PAGE_ALLOCATOR.lock().alloc(pages)
 }
 
-pub fn pfree(addr: PhysicalAddr, pages: usize) -> Result<()> {
-    PAGE_ALLOCATOR.lock().free(addr, pages)
+pub fn pfree(addr: PhysicalAddr) -> Result<()> {
+    PAGE_ALLOCATOR.lock().free(addr)
 }
 
 #[cfg(test)]
@@ -117,7 +113,7 @@ mod tests {
         let addr2 = allocator.alloc(1).unwrap();
         assert_eq!(addr1, PhysicalAddr::new(first_page));
         assert_eq!(addr2, PhysicalAddr::new(first_page + PAGE_SIZE));
-        allocator.free(addr1, 1).unwrap();
+        allocator.free(addr1).unwrap();
         let addr3 = allocator.alloc(1).unwrap();
         assert_eq!(addr3, PhysicalAddr::new(first_page)); // should reuse the freed page
     }
