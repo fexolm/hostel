@@ -96,6 +96,10 @@ impl PageTable {
         self.get_level(vaddr, PageTableLevel::Pml4)
     }
 
+    pub fn get_if_present(&self, vaddr: VirtualAddr) -> Result<Option<PageTableEntry>> {
+        self.get_present_level(vaddr, PageTableLevel::Pml4)
+    }
+
     fn get_level(
         &mut self,
         vaddr: VirtualAddr,
@@ -117,6 +121,23 @@ impl PageTable {
         };
         let child = Self::from_paddr_mut(entry.addr())?;
         child.get_level(vaddr, next)
+    }
+
+    fn get_present_level(&self, vaddr: VirtualAddr, level: PageTableLevel) -> Result<Option<PageTableEntry>> {
+        let entry = self.entries[index_for(level, vaddr)];
+        if !entry.is_present() {
+            return Ok(None);
+        }
+
+        if level == PageTableLevel::Pd {
+            return Ok(Some(entry));
+        }
+
+        let Some(next) = level.next() else {
+            return Ok(None);
+        };
+        let child = Self::from_paddr(entry.addr())?;
+        child.get_present_level(vaddr, next)
     }
 
     pub fn free(&mut self) -> Result<()> {

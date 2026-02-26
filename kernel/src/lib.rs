@@ -5,6 +5,7 @@ pub mod error;
 pub mod memory;
 pub mod process;
 pub mod syscall;
+mod scheduler;
 
 #[macro_export]
 macro_rules! print {
