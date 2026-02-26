@@ -225,6 +225,12 @@ impl Scheduler {
         }
     }
 
+    fn has_pid(&self, pid: usize) -> bool {
+        self.processes.iter().any(|proc| {
+            proc.id == pid && (proc.state == State::Ready || proc.state == State::Running)
+        })
+    }
+
     fn find_next_ready(&self, current: usize) -> Option<usize> {
         for i in 0..MAX_PROCESSES {
             let idx = if current == NO_PROCESS {
@@ -268,6 +274,10 @@ pub(crate) fn current_pid() -> usize {
 
 pub(crate) fn current_slot() -> Option<usize> {
     SCHEDULER.lock().current_slot()
+}
+
+pub(crate) fn has_pid(pid: usize) -> bool {
+    SCHEDULER.lock().has_pid(pid)
 }
 
 fn save_current_fxstate(context: &mut Context) {

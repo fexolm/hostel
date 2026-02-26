@@ -223,6 +223,10 @@ pub fn current_pid() -> usize {
     scheduler::current_pid()
 }
 
+pub fn has_pid(pid: usize) -> bool {
+    scheduler::has_pid(pid)
+}
+
 fn with_current_process_mut<T>(f: impl FnOnce(&mut Process) -> MemoryResult<T>) -> MemoryResult<T> {
     let mut processes = PROCESSES.lock();
     let current = scheduler::current_slot().expect("no running process");

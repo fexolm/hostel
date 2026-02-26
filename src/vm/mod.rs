@@ -3,7 +3,10 @@ mod serial;
 mod x64;
 
 pub use self::error::{Error, Result};
-use kernel::memory::constants::{KERNEL_CODE_SIZE, KERNEL_CODE_VIRT, MAX_PHYSICAL_ADDR};
+use kernel::{
+    boot::{KERNEL_TEST_EXIT_FAILURE, KERNEL_TEST_EXIT_PORT, KERNEL_TEST_EXIT_SUCCESS, RunFlags},
+    memory::constants::{KERNEL_CODE_SIZE, KERNEL_CODE_VIRT, MAX_PHYSICAL_ADDR, RUN_FLAGS_PHYS},
+};
 use kvm_bindings::KVM_MAX_CPUID_ENTRIES;
 use kvm_ioctls::{Kvm, VmFd};
 use vm_memory::{Bytes, GuestAddress, GuestMemoryMmap};
@@ -22,6 +25,7 @@ pub struct Vm {
     vcpus: Vec<kvm_ioctls::VcpuFd>,
     boot_mem: GuestMemoryMmap<()>,
     serial: SerialConsole16550,
+    run_flags: RunFlags,
 }
 
 impl Vm {
@@ -38,13 +42,16 @@ impl Vm {
 
         init_x64(&vm, &vcpus, &boot_mem, MEM_SIZE)?;
 
-        Ok(Self {
+        let mut vm = Self {
             _kvm: kvm,
             _vm: vm,
             vcpus,
             boot_mem,
             serial: SerialConsole16550::new(),
-        })
+            run_flags: RunFlags::empty(),
+        };
+        vm.write_run_flags()?;
+        Ok(vm)
     }
 
     /// Load an executable ELF blob into the guest memory and adjust the entry
@@ -93,17 +100,34 @@ impl Vm {
         Ok(())
     }
 
+    pub fn set_run_flags(&mut self, run_flags: RunFlags) -> Result<()> {
+        self.run_flags = run_flags;
+        self.write_run_flags()
+    }
+
     /// Run the single vCPU until it halts.
     pub fn run(&mut self) -> Result<()> {
         use kvm_ioctls::VcpuExit;
+
+        self.write_run_flags()?;
+        let run_tests = self.run_flags.run_tests();
 
         loop {
             match self.vcpus[0].run()? {
                 VcpuExit::Hlt => {
                     self.serial.flush()?;
+                    if run_tests {
+                        return Err(Error::UnexpectedExit(
+                            "guest halted before kernel tests reported PASS/FAIL".to_string(),
+                        ));
+                    }
                     return Ok(());
                 }
                 VcpuExit::IoOut(port, data) => {
+                    if port == KERNEL_TEST_EXIT_PORT {
+                        self.serial.flush()?;
+                        return Self::handle_kernel_test_exit(run_tests, data);
+                    }
                     if self.serial.handles_range(port, data.len()) {
                         self.serial.io_out(port, data)?;
                     } else {
@@ -133,11 +157,43 @@ impl Vm {
     pub fn guest_memory(&self) -> &GuestMemoryMmap<()> {
         &self.boot_mem
     }
+
+    fn write_run_flags(&mut self) -> Result<()> {
+        self.boot_mem.write_slice(
+            &self.run_flags.bits().to_le_bytes(),
+            GuestAddress(RUN_FLAGS_PHYS.as_u64()),
+        )?;
+        Ok(())
+    }
+
+    fn handle_kernel_test_exit(run_tests: bool, data: &[u8]) -> Result<()> {
+        if !run_tests {
+            return Err(Error::UnexpectedExit(
+                "kernel emitted test exit code without run_tests flag".to_string(),
+            ));
+        }
+        if data.len() != core::mem::size_of::<u32>() {
+            return Err(Error::UnexpectedExit(format!(
+                "kernel test exit code has invalid size: {}",
+                data.len()
+            )));
+        }
+
+        let code = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        match code {
+            KERNEL_TEST_EXIT_SUCCESS => Ok(()),
+            KERNEL_TEST_EXIT_FAILURE => Err(Error::KernelTestsFailed),
+            other => Err(Error::UnexpectedExit(format!(
+                "unknown kernel test exit code: {other:#x}"
+            ))),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::vm::Vm;
+    use kernel::boot::RunFlags;
 
     #[test]
     fn vm_loads_kernel_elf_from_build_script() {
@@ -148,5 +204,17 @@ mod tests {
         let mut vm = Vm::new().unwrap();
         vm.load_elf(&data).expect("load elf");
         vm.run().expect("run guest");
+    }
+
+    #[test]
+    fn vm_runs_kernel_integration_tests() {
+        let path = env!("KERNEL_BIN");
+        let data = std::fs::read(path).expect("read kernel elf");
+
+        let mut vm = Vm::new().unwrap();
+        vm.set_run_flags(RunFlags::empty().with_run_tests(true))
+            .expect("write run flags");
+        vm.load_elf(&data).expect("load elf");
+        vm.run().expect("kernel integration tests must pass");
     }
 }

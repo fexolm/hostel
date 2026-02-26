@@ -19,4 +19,4 @@ kernel = { path = "kernel" }
 kernel = { path = "kernel" }
 
 [workspace]
-members = ["kernel"]
+members = ["kernel", "kernel-tests", "kernel-tests-macros"]

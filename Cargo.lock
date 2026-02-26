@@ -151,8 +151,25 @@ name = "kernel"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.11.0",
+ "kernel-tests",
  "spin",
  "thiserror",
+]
+
+[[package]]
+name = "kernel-tests"
+version = "0.1.0"
+dependencies = [
+ "kernel-tests-macros",
+]
+
+[[package]]
+name = "kernel-tests-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

@@ -20,6 +20,9 @@ pub enum Error {
 
     #[error("unexpected vCPU exit: {0}")]
     UnexpectedExit(String),
+
+    #[error("kernel integration tests failed")]
+    KernelTestsFailed,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

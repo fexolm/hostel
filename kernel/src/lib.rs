@@ -1,11 +1,12 @@
 #![cfg_attr(not(test), no_std)]
 
+pub mod boot;
 pub mod console;
 pub mod error;
 pub mod memory;
 pub mod process;
-pub mod syscall;
 mod scheduler;
+pub mod syscall;
 
 #[macro_export]
 macro_rules! print {
