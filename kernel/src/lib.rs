@@ -4,6 +4,7 @@ pub mod console;
 pub mod error;
 pub mod memory;
 pub mod process;
+pub mod syscall;
 
 #[macro_export]
 macro_rules! print {

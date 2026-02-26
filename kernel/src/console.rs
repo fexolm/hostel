@@ -11,6 +11,10 @@ pub fn init() {
     SERIAL1.lock().init();
 }
 
+pub fn write_bytes(bytes: &[u8]) {
+    SERIAL1.lock().write_bytes(bytes);
+}
+
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments<'_>) {
     let _ = SERIAL1.lock().write_fmt(args);
@@ -52,6 +56,15 @@ impl SerialPort {
     fn write_byte(&self, byte: u8) {
         while self.read_reg(5) & LSR_THR_EMPTY == 0 {}
         self.write_reg(0, byte);
+    }
+
+    fn write_bytes(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            if byte == b'\n' {
+                self.write_byte(b'\r');
+            }
+            self.write_byte(byte);
+        }
     }
 }
 

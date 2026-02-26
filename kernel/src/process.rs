@@ -399,6 +399,10 @@ fn exit_current() -> ! {
     unreachable!("exit_current should never return");
 }
 
+pub fn terminate_current() -> ! {
+    exit_current()
+}
+
 pub fn current_pid() -> usize {
     let sched = SCHEDULER.lock();
     if sched.current == NO_PROCESS {
