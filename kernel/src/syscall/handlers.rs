@@ -1,8 +1,11 @@
 use core::arch::{asm, global_asm};
 
-use crate::{console, process};
+use crate::{console, memory::errors::MemoryError, process};
 
-use super::{SYS_EXIT, SYS_EXIT_GROUP, SYS_GETPID, SYS_SCHED_YIELD, SYS_WRITE};
+use super::{
+    MAP_ANONYMOUS, MAP_PRIVATE, MAP_SHARED, SYS_BRK, SYS_EXIT, SYS_EXIT_GROUP, SYS_GETPID,
+    SYS_MMAP, SYS_SCHED_YIELD, SYS_WRITE,
+};
 
 const STDOUT_FD: u64 = 1;
 const STDERR_FD: u64 = 2;
@@ -10,6 +13,7 @@ const STDERR_FD: u64 = 2;
 const EBADF: i64 = 9;
 const EFAULT: i64 = 14;
 const EINVAL: i64 = 22;
+const ENOMEM: i64 = 12;
 const ENOSYS: i64 = 38;
 
 const IA32_STAR: u32 = 0xC000_0081;
@@ -92,12 +96,14 @@ extern "C" fn __syscall_dispatch(
     arg0: u64,
     arg1: u64,
     arg2: u64,
-    _arg3: u64,
-    _arg4: u64,
-    _arg5: u64,
+    arg3: u64,
+    arg4: u64,
+    arg5: u64,
 ) -> u64 {
     match nr {
         SYS_WRITE => sys_write(arg0, arg1, arg2),
+        SYS_BRK => sys_brk(arg0),
+        SYS_MMAP => sys_mmap(arg0, arg1, arg2, arg3, arg4 as i64, arg5),
         SYS_GETPID => process::current_pid() as u64,
         SYS_SCHED_YIELD => {
             process::yield_now();
@@ -129,6 +135,49 @@ fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
     let bytes = unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
     console::write_bytes(bytes);
     len as u64
+}
+
+fn sys_brk(addr: u64) -> u64 {
+    match process::brk(addr as usize) {
+        Ok(cur) => cur as u64,
+        Err(err) => errno(memory_errno(err)),
+    }
+}
+
+fn sys_mmap(addr: u64, len: u64, _prot: u64, flags: u64, fd: i64, offset: u64) -> u64 {
+    let Ok(len) = usize::try_from(len) else {
+        return errno(EINVAL);
+    };
+    if len == 0 {
+        return errno(EINVAL);
+    }
+    if offset != 0 {
+        return errno(EINVAL);
+    }
+
+    let sharing = flags & (MAP_PRIVATE | MAP_SHARED);
+    if sharing == 0 {
+        return errno(EINVAL);
+    }
+    if (flags & MAP_ANONYMOUS) == 0 {
+        return errno(ENOSYS);
+    }
+    if fd != -1 {
+        return errno(EINVAL);
+    }
+
+    match process::mmap(addr as usize, len, flags) {
+        Ok(mapped) => mapped as u64,
+        Err(err) => errno(memory_errno(err)),
+    }
+}
+
+const fn memory_errno(err: MemoryError) -> i64 {
+    match err {
+        MemoryError::OutOfMemory | MemoryError::TooManyLargeAllocations => ENOMEM,
+        MemoryError::AlreadyMapped { .. } => ENOMEM,
+        _ => EINVAL,
+    }
 }
 
 #[inline]
