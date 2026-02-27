@@ -74,8 +74,9 @@ pub fn init_x64(
     for i in 0..2 {
         let pd_phys = KERNEL_CODE_PD.as_u64() + (i as u64 * PAGE_TABLE_SIZE as u64);
         let entry_val = pd_phys | PTE_PRESENT | PTE_RW;
-        let entry_addr =
-            GuestAddress(KERNEL_CODE_PDPD.as_u64() + ((KERNEL_CODE_VIRT.pdpt_index() + i) * 8) as u64);
+        let entry_addr = GuestAddress(
+            KERNEL_CODE_PDPD.as_u64() + ((KERNEL_CODE_VIRT.pdpt_index() + i) * 8) as u64,
+        );
         boot_mem.write_slice(&entry_val.to_le_bytes(), entry_addr)?;
     }
 
@@ -102,7 +103,10 @@ pub fn init_x64(
     // - RSP: stack pointer inside guest memory
     // - RFLAGS: set the reserved bit required by x86
     let mut regs = vcpus[0].get_regs()?;
-    regs.rsp = KERNEL_STACK.to_virtual().unwrap().as_u64(); // initial stack pointer
+    // _start is entered without a CALL frame; keep SysV ABI expectation
+    // (RSP % 16 == 8 on function entry) so local variables that require
+    // 16-byte alignment remain aligned after prologue.
+    regs.rsp = KERNEL_STACK.to_virtual().as_u64() - 8;
     regs.rflags = RFLAGS_RESERVED; // required reserved bit
     vcpus[0].set_regs(&regs)?;
 

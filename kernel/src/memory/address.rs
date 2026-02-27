@@ -27,14 +27,9 @@ impl PhysicalAddr {
         PhysicalAddr((self.0 + align - 1) & !(align - 1))
     }
 
-    pub const fn to_virtual(self) -> Result<VirtualAddr> {
-        if self.0 > crate::memory::constants::MAX_PHYSICAL_ADDR {
-            Err(MemoryError::PhysicalToVirtual { addr: self.0 })
-        } else {
-            Ok(VirtualAddr(
-                self.0 + crate::memory::constants::DIRECT_MAP_OFFSET.0,
-            ))
-        }
+    pub const fn to_virtual(self) -> VirtualAddr {
+        assert!(self.0 < crate::memory::constants::MAX_PHYSICAL_ADDR);
+        VirtualAddr(self.0 + crate::memory::constants::DIRECT_MAP_OFFSET.0)
     }
 }
 

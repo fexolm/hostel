@@ -104,14 +104,14 @@ extern "C" fn __syscall_dispatch(
         SYS_WRITE => sys_write(arg0, arg1, arg2),
         SYS_BRK => sys_brk(arg0),
         SYS_MMAP => sys_mmap(arg0, arg1, arg2, arg3, arg4 as i64, arg5),
-        SYS_GETPID => process::current_pid() as u64,
+        SYS_GETPID => process::current_pid(crate::active_kernel()) as u64,
         SYS_SCHED_YIELD => {
-            process::yield_now();
+            process::yield_now(crate::active_kernel());
             0
         }
         SYS_EXIT | SYS_EXIT_GROUP => {
             let _status = arg0 as i32;
-            process::terminate_current()
+            process::terminate_current(crate::active_kernel())
         }
         _ => errno(ENOSYS),
     }
@@ -138,7 +138,7 @@ fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
 }
 
 fn sys_brk(addr: u64) -> u64 {
-    match process::brk(addr as usize) {
+    match process::brk(crate::active_kernel(), addr as usize) {
         Ok(cur) => cur as u64,
         Err(err) => errno(memory_errno(err)),
     }
@@ -166,7 +166,7 @@ fn sys_mmap(addr: u64, len: u64, _prot: u64, flags: u64, fd: i64, offset: u64) -
         return errno(EINVAL);
     }
 
-    match process::mmap(addr as usize, len, flags) {
+    match process::mmap(crate::active_kernel(), addr as usize, len, flags) {
         Ok(mapped) => mapped as u64,
         Err(err) => errno(memory_errno(err)),
     }
@@ -222,11 +222,17 @@ mod tests {
 
     #[test]
     fn write_rejects_unknown_fd() {
-        assert_eq!(__syscall_dispatch(SYS_WRITE, 7, 0, 0, 0, 0, 0) as i64, -EBADF);
+        assert_eq!(
+            __syscall_dispatch(SYS_WRITE, 7, 0, 0, 0, 0, 0) as i64,
+            -EBADF
+        );
     }
 
     #[test]
     fn write_rejects_null_pointer_for_non_zero_len() {
-        assert_eq!(__syscall_dispatch(SYS_WRITE, 1, 0, 1, 0, 0, 0) as i64, -EFAULT);
+        assert_eq!(
+            __syscall_dispatch(SYS_WRITE, 1, 0, 1, 0, 0, 0) as i64,
+            -EFAULT
+        );
     }
 }

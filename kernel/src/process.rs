@@ -1,39 +1,112 @@
 use core::arch::global_asm;
 use core::ptr::{null, null_mut};
 
+use crate::Kernel;
 use crate::memory::{
-    address::PhysicalAddr,
-    alloc::palloc::{palloc, pfree},
-    constants::PAGE_SIZE,
-    errors::Result as MemoryResult,
-    pagetable::PageTable,
-    vmm::Vmm,
+    address::PhysicalAddr, constants::PAGE_SIZE, errors::Result as MemoryResult, vmm::Vmm,
 };
-use crate::scheduler::{self, Context, ExitPlan, SwitchPlan, MAX_PROCESSES};
+use crate::scheduler::{Context, ExitPlan, MAX_PROCESSES, Scheduler, SwitchPlan};
 
 const PROCESS_STACK_PAGES: usize = 1;
 
 pub type ProcessFn = fn();
 
-#[derive(Clone, Copy)]
-struct Process {
-    vmm: Vmm,
+struct Process<'i> {
+    vmm: Vmm<'i>,
     stack_base: PhysicalAddr,
     stack_pages: usize,
 }
 
-impl Process {
-    const fn empty() -> Self {
-        Self {
-            vmm: Vmm::empty(),
-            stack_base: PhysicalAddr::new(0),
-            stack_pages: 0,
-        }
-    }
+pub struct ProcessState<'i> {
+    inner: spin::Mutex<ProcessStateInner<'i>>,
 }
 
-static PROCESSES: spin::Mutex<[Process; MAX_PROCESSES]> =
-    spin::Mutex::new([Process::empty(); MAX_PROCESSES]);
+struct ProcessStateInner<'i> {
+    scheduler: Scheduler,
+    processes: [Option<Process<'i>>; MAX_PROCESSES],
+}
+
+impl<'i> ProcessState<'i> {
+    pub fn new() -> Self {
+        Self {
+            inner: spin::Mutex::new(ProcessStateInner {
+                scheduler: Scheduler::new(),
+                processes: core::array::from_fn(|_| None),
+            }),
+        }
+    }
+
+    fn spawn(&self, kernel: &Kernel<'i>, entry: ProcessFn) -> usize {
+        let vmm = Vmm::new(kernel.page_table, kernel.kalloc).expect("create vmm");
+        let stack_base = kernel
+            .palloc
+            .alloc(PROCESS_STACK_PAGES)
+            .expect("allocate process stack");
+
+        let stack_top = stack_base.to_virtual().add(PAGE_SIZE * PROCESS_STACK_PAGES);
+
+        // Keep SysV stack alignment for first frame (entry sees RSP % 16 == 8).
+        let initial_rsp = stack_top.as_usize() - 2 * core::mem::size_of::<u64>();
+        unsafe {
+            *(initial_rsp as *mut u64) = process_trampoline as *const () as usize as u64;
+        }
+
+        let mut inner = self.inner.lock();
+        let spawn = inner
+            .scheduler
+            .spawn(entry, initial_rsp as u64, vmm.root().as_u64());
+        inner.processes[spawn.slot] = Some(Process {
+            vmm,
+            stack_base,
+            stack_pages: PROCESS_STACK_PAGES,
+        });
+        spawn.pid
+    }
+
+    fn plan_kernel_to_first(&self) -> Option<SwitchPlan> {
+        self.inner.lock().scheduler.plan_kernel_to_first()
+    }
+
+    fn plan_yield(&self) -> Option<SwitchPlan> {
+        self.inner.lock().scheduler.plan_yield()
+    }
+
+    fn plan_exit_current(&self) -> (SwitchPlan, Process<'i>) {
+        let mut inner = self.inner.lock();
+        let ExitPlan {
+            switch,
+            exited_slot,
+        } = inner.scheduler.plan_exit_current();
+        let process = inner.processes[exited_slot]
+            .take()
+            .expect("exited process slot must be populated");
+        (switch, process)
+    }
+
+    fn current_entry(&self) -> ProcessFn {
+        self.inner.lock().scheduler.current_entry()
+    }
+
+    fn current_pid(&self) -> usize {
+        self.inner.lock().scheduler.current_pid()
+    }
+
+    fn has_pid(&self, pid: usize) -> bool {
+        self.inner.lock().scheduler.has_pid(pid)
+    }
+
+    fn with_current_process_mut<T>(
+        &self,
+        f: impl FnOnce(&mut Process<'i>) -> MemoryResult<T>,
+    ) -> MemoryResult<T> {
+        let mut inner = self.inner.lock();
+        let current = inner.scheduler.current_slot().expect("no running process");
+        let process = inner.processes[current]
+            .as_mut()
+            .expect("running process slot must be populated");
+        f(process)
+    }
+}
 
 #[unsafe(no_mangle)]
 static mut SWITCH_OLD_CTX: *mut Context = null_mut();
@@ -132,37 +205,18 @@ unsafe fn switch_context(plan: SwitchPlan) {
 }
 
 extern "C" fn process_trampoline() -> ! {
-    let entry = scheduler::current_entry();
+    let kernel = crate::active_kernel();
+    let entry = kernel.process.current_entry();
     entry();
-    exit_current();
+    terminate_current(kernel);
 }
 
-pub fn spawn(entry: ProcessFn) -> usize {
-    let pml4_base = PageTable::alloc_user_pml4().expect("allocate user pml4");
-    let stack_base = palloc(PROCESS_STACK_PAGES).expect("allocate process stack");
-    let stack_top = stack_base
-        .to_virtual()
-        .expect("process stack must be direct-map address")
-        .add(PAGE_SIZE * PROCESS_STACK_PAGES);
-
-    // Keep SysV stack alignment for first frame (entry sees RSP % 16 == 8).
-    let initial_rsp = stack_top.as_usize() - 2 * core::mem::size_of::<u64>();
-    unsafe {
-        *(initial_rsp as *mut u64) = process_trampoline as *const () as usize as u64;
-    }
-
-    let spawn = scheduler::spawn(entry, initial_rsp as u64, pml4_base.as_u64());
-    PROCESSES.lock()[spawn.slot] = Process {
-        vmm: Vmm::new(pml4_base),
-        stack_base,
-        stack_pages: PROCESS_STACK_PAGES,
-    };
-
-    spawn.pid
+pub fn spawn(kernel: &Kernel<'_>, entry: ProcessFn) -> usize {
+    kernel.process.spawn(kernel, entry)
 }
 
-pub fn yield_now() {
-    let plan = scheduler::plan_yield();
+pub fn yield_now(kernel: &Kernel<'_>) {
+    let plan = kernel.process.plan_yield();
     if let Some(plan) = plan {
         unsafe {
             switch_context(plan);
@@ -170,9 +224,9 @@ pub fn yield_now() {
     }
 }
 
-pub fn run() -> ! {
+pub fn run(kernel: &Kernel<'_>) -> ! {
     loop {
-        match scheduler::plan_kernel_to_first() {
+        match kernel.process.plan_kernel_to_first() {
             Some(plan) => unsafe {
                 switch_context(plan);
             },
@@ -185,17 +239,9 @@ pub fn run() -> ! {
     }
 }
 
-fn exit_current() -> ! {
-    let ExitPlan { switch, exited_slot } = scheduler::plan_exit_current();
-
-    let process = {
-        let mut processes = PROCESSES.lock();
-        let process = processes[exited_slot];
-        processes[exited_slot] = Process::empty();
-        process
-    };
-
-    cleanup_process(process);
+fn exit_current(kernel: &Kernel<'_>) -> ! {
+    let (switch, process) = kernel.process.plan_exit_current();
+    cleanup_process(kernel, process);
 
     unsafe {
         switch_context(switch);
@@ -203,40 +249,37 @@ fn exit_current() -> ! {
     unreachable!("exit_current should never return");
 }
 
-fn cleanup_process(process: Process) {
-    let user_root = process.vmm.root();
-    if user_root.as_u64() != 0 {
-        let root = PageTable::from_paddr_mut(user_root).expect("valid user root page table");
-        root.free().expect("free user page table tree");
-    }
+fn cleanup_process(kernel: &Kernel<'_>, process: Process<'_>) {
+    drop(process.vmm);
 
     for page in 0..process.stack_pages {
-        pfree(process.stack_base.add(PAGE_SIZE * page)).expect("free process stack");
+        kernel
+            .palloc
+            .free(process.stack_base.add(PAGE_SIZE * page))
+            .expect("free process stack");
     }
 }
 
-pub fn terminate_current() -> ! {
-    exit_current()
+pub fn terminate_current(kernel: &Kernel<'_>) -> ! {
+    exit_current(kernel)
 }
 
-pub fn current_pid() -> usize {
-    scheduler::current_pid()
+pub fn current_pid(kernel: &Kernel<'_>) -> usize {
+    kernel.process.current_pid()
 }
 
-pub fn has_pid(pid: usize) -> bool {
-    scheduler::has_pid(pid)
+pub fn has_pid(kernel: &Kernel<'_>, pid: usize) -> bool {
+    kernel.process.has_pid(pid)
 }
 
-fn with_current_process_mut<T>(f: impl FnOnce(&mut Process) -> MemoryResult<T>) -> MemoryResult<T> {
-    let mut processes = PROCESSES.lock();
-    let current = scheduler::current_slot().expect("no running process");
-    f(&mut processes[current])
+pub fn brk(kernel: &Kernel<'_>, requested: usize) -> MemoryResult<usize> {
+    kernel
+        .process
+        .with_current_process_mut(|proc| proc.vmm.brk(requested))
 }
 
-pub fn brk(requested: usize) -> MemoryResult<usize> {
-    with_current_process_mut(|proc| proc.vmm.brk(requested))
-}
-
-pub fn mmap(hint: usize, len: usize, flags: u64) -> MemoryResult<usize> {
-    with_current_process_mut(|proc| proc.vmm.mmap(hint, len, flags))
+pub fn mmap(kernel: &Kernel<'_>, hint: usize, len: usize, flags: u64) -> MemoryResult<usize> {
+    kernel
+        .process
+        .with_current_process_mut(|proc| proc.vmm.mmap(hint, len, flags))
 }

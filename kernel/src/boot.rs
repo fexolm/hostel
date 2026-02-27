@@ -44,9 +44,7 @@ impl RunFlags {
 }
 
 pub fn read_run_flags() -> RunFlags {
-    let flags_addr = RUN_FLAGS_PHYS
-        .to_virtual()
-        .expect("run-flags physical address must be direct-map accessible");
+    let flags_addr = RUN_FLAGS_PHYS.to_virtual();
     let raw = unsafe { core::ptr::read_volatile(flags_addr.as_ptr::<u64>() as *const u64) };
     RunFlags::from_bits(raw)
 }

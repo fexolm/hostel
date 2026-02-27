@@ -1,9 +1,9 @@
 use crate::memory::{
     address::{PhysicalAddr, VirtualAddr},
-    alloc::palloc::{palloc, pfree},
+    alloc::kmalloc::KernelAllocator,
     constants::PAGE_SIZE,
     errors::{MemoryError, Result},
-    pagetable::PageTable,
+    pagetable::RootPageTable,
 };
 
 const USER_HEAP_BASE: usize = 0x0000_0001_0000_0000;
@@ -11,46 +11,38 @@ const USER_MMAP_BASE: usize = 0x0000_0004_0000_0000;
 const USER_MMAP_LIMIT: usize = 0x0000_7000_0000_0000;
 const MAP_FIXED: u64 = 0x10;
 
-#[derive(Clone, Copy)]
-pub struct Vmm {
-    pml4: PhysicalAddr,
+pub struct Vmm<'i> {
     heap_base: usize,
     brk: usize,
     brk_mapped_end: usize,
     mmap_base: usize,
     mmap_next: usize,
+    kalloc: &'i KernelAllocator<'i>,
+    page_table: RootPageTable<'i>,
 }
 
-impl Vmm {
-    pub const fn empty() -> Self {
-        Self {
-            pml4: PhysicalAddr::new(0),
-            heap_base: 0,
-            brk: 0,
-            brk_mapped_end: 0,
-            mmap_base: 0,
-            mmap_next: 0,
-        }
-    }
-
-    pub const fn new(pml4: PhysicalAddr) -> Self {
-        Self {
-            pml4,
+impl<'i> Vmm<'i> {
+    pub fn new(
+        kernel_page_table: &'i RootPageTable<'i>,
+        kalloc: &'i KernelAllocator<'i>,
+    ) -> Result<Self> {
+        Ok(Self {
             heap_base: USER_HEAP_BASE,
             brk: USER_HEAP_BASE,
             brk_mapped_end: USER_HEAP_BASE,
             mmap_base: USER_MMAP_BASE,
             mmap_next: USER_MMAP_BASE,
-        }
+            kalloc,
+            page_table: RootPageTable::new(kernel_page_table, kalloc)?,
+        })
     }
 
-    pub const fn root(&self) -> PhysicalAddr {
-        self.pml4
+    pub fn root(&self) -> PhysicalAddr {
+        self.page_table.addr()
     }
 
-    fn map_user_memory(&self, paddr: PhysicalAddr, vaddr: VirtualAddr) -> Result<()> {
-        let pml4 = PageTable::from_paddr_mut(self.pml4)?;
-        let pde = pml4.get(vaddr)?;
+    fn map_user_memory(&mut self, paddr: PhysicalAddr, vaddr: VirtualAddr) -> Result<()> {
+        let pde = self.page_table.get(vaddr)?;
         if pde.is_present() {
             return Err(MemoryError::AlreadyMapped {
                 addr: vaddr.as_usize(),
@@ -136,11 +128,10 @@ impl Vmm {
         }
     }
 
-    fn range_is_unmapped(&self, start: usize, end: usize) -> Result<bool> {
-        let pml4 = PageTable::from_paddr(self.pml4)?;
+    fn range_is_unmapped(&mut self, start: usize, end: usize) -> Result<bool> {
         let mut vaddr = start;
         while vaddr < end {
-            let entry = pml4.get_if_present(VirtualAddr::new(vaddr))?;
+            let entry = self.page_table.get_if_present(VirtualAddr::new(vaddr))?;
             if entry.is_some_and(|e| e.is_present()) {
                 return Ok(false);
             }
@@ -149,7 +140,7 @@ impl Vmm {
         Ok(true)
     }
 
-    fn map_user_range(&self, start: usize, end: usize) -> Result<()> {
+    fn map_user_range(&mut self, start: usize, end: usize) -> Result<()> {
         let mut vaddr = start;
         while vaddr < end {
             self.map_user_page(vaddr)?;
@@ -158,10 +149,10 @@ impl Vmm {
         Ok(())
     }
 
-    fn map_user_page(&self, vaddr: usize) -> Result<()> {
-        let paddr = palloc(1)?;
+    fn map_user_page(&mut self, vaddr: usize) -> Result<()> {
+        let paddr = self.kalloc.alloc(PAGE_SIZE)?;
         if let Err(err) = self.map_user_memory(paddr, VirtualAddr::new(vaddr)) {
-            pfree(paddr)?;
+            self.kalloc.free(paddr)?;
             return Err(err);
         }
         Ok(())

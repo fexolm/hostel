@@ -98,7 +98,7 @@ pub struct ExitPlan {
     pub exited_slot: usize,
 }
 
-struct Scheduler {
+pub(crate) struct Scheduler {
     kernel_context: Context,
     processes: [Process; MAX_PROCESSES],
     current: usize,
@@ -106,7 +106,7 @@ struct Scheduler {
 }
 
 impl Scheduler {
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             kernel_context: Context::empty(),
             processes: [Process::empty(); MAX_PROCESSES],
@@ -115,7 +115,7 @@ impl Scheduler {
         }
     }
 
-    fn spawn(&mut self, entry: ProcessFn, rsp: u64, cr3: u64) -> SpawnPlan {
+    pub(crate) fn spawn(&mut self, entry: ProcessFn, rsp: u64, cr3: u64) -> SpawnPlan {
         let slot = self
             .processes
             .iter()
@@ -140,7 +140,7 @@ impl Scheduler {
         SpawnPlan { slot, pid }
     }
 
-    fn plan_kernel_to_first(&mut self) -> Option<SwitchPlan> {
+    pub(crate) fn plan_kernel_to_first(&mut self) -> Option<SwitchPlan> {
         let next = self.find_next_ready(NO_PROCESS)?;
         self.processes[next].state = State::Running;
         self.current = next;
@@ -150,7 +150,7 @@ impl Scheduler {
         })
     }
 
-    fn plan_yield(&mut self) -> Option<SwitchPlan> {
+    pub(crate) fn plan_yield(&mut self) -> Option<SwitchPlan> {
         if self.current == NO_PROCESS {
             return self.plan_kernel_to_first();
         }
@@ -173,7 +173,7 @@ impl Scheduler {
         })
     }
 
-    fn plan_exit_current(&mut self) -> ExitPlan {
+    pub(crate) fn plan_exit_current(&mut self) -> ExitPlan {
         let current = self.current;
         assert!(current != NO_PROCESS, "no running process to exit");
 
@@ -202,14 +202,14 @@ impl Scheduler {
         }
     }
 
-    fn current_entry(&self) -> ProcessFn {
+    pub(crate) fn current_entry(&self) -> ProcessFn {
         assert!(self.current != NO_PROCESS, "no running process");
         self.processes[self.current]
             .entry
             .expect("running process has no entry function")
     }
 
-    fn current_pid(&self) -> usize {
+    pub(crate) fn current_pid(&self) -> usize {
         if self.current == NO_PROCESS {
             0
         } else {
@@ -217,7 +217,7 @@ impl Scheduler {
         }
     }
 
-    fn current_slot(&self) -> Option<usize> {
+    pub(crate) fn current_slot(&self) -> Option<usize> {
         if self.current == NO_PROCESS {
             None
         } else {
@@ -225,7 +225,7 @@ impl Scheduler {
         }
     }
 
-    fn has_pid(&self, pid: usize) -> bool {
+    pub(crate) fn has_pid(&self, pid: usize) -> bool {
         self.processes.iter().any(|proc| {
             proc.id == pid && (proc.state == State::Ready || proc.state == State::Running)
         })
@@ -244,40 +244,6 @@ impl Scheduler {
         }
         None
     }
-}
-
-static SCHEDULER: spin::Mutex<Scheduler> = spin::Mutex::new(Scheduler::new());
-
-pub(crate) fn spawn(entry: ProcessFn, rsp: u64, cr3: u64) -> SpawnPlan {
-    SCHEDULER.lock().spawn(entry, rsp, cr3)
-}
-
-pub(crate) fn plan_kernel_to_first() -> Option<SwitchPlan> {
-    SCHEDULER.lock().plan_kernel_to_first()
-}
-
-pub(crate) fn plan_yield() -> Option<SwitchPlan> {
-    SCHEDULER.lock().plan_yield()
-}
-
-pub(crate) fn plan_exit_current() -> ExitPlan {
-    SCHEDULER.lock().plan_exit_current()
-}
-
-pub(crate) fn current_entry() -> ProcessFn {
-    SCHEDULER.lock().current_entry()
-}
-
-pub(crate) fn current_pid() -> usize {
-    SCHEDULER.lock().current_pid()
-}
-
-pub(crate) fn current_slot() -> Option<usize> {
-    SCHEDULER.lock().current_slot()
-}
-
-pub(crate) fn has_pid(pid: usize) -> bool {
-    SCHEDULER.lock().has_pid(pid)
 }
 
 fn save_current_fxstate(context: &mut Context) {

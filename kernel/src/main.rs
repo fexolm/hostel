@@ -1,10 +1,28 @@
 #![no_std]
 #![no_main]
 
-use kernel::{boot, process, syscall};
+use kernel::{
+    Kernel, boot,
+    memory::{
+        alloc::{kmalloc::KernelAllocator, palloc::PageAllocator},
+        constants::DIRECT_MAP_PML4,
+        pagetable::RootPageTable,
+    },
+    process, syscall,
+};
+
+static PAGE_ALLOCATOR: PageAllocator = PageAllocator::new();
+
+static KERNEL_ALLOCATOR: KernelAllocator = KernelAllocator::new(&PAGE_ALLOCATOR);
+
+static KERNEL_PAGE_TABLE: RootPageTable =
+    unsafe { RootPageTable::from_paddr(DIRECT_MAP_PML4, &KERNEL_ALLOCATOR) };
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
+    let kernel = Kernel::new(&PAGE_ALLOCATOR, &KERNEL_ALLOCATOR, &KERNEL_PAGE_TABLE);
+    kernel::set_active_kernel(&kernel);
+
     kernel::console::init();
     syscall::init();
     let run_flags = kernel::boot::read_run_flags();
@@ -15,10 +33,10 @@ pub extern "C" fn _start() -> ! {
     }
 
     kernel::println!("kernel: boot");
-    let p1 = process::spawn(task_a);
-    let p2 = process::spawn(task_b);
+    let p1 = process::spawn(&kernel, task_a);
+    let p2 = process::spawn(&kernel, task_b);
     kernel::println!("kernel: spawned pid={} pid={}", p1, p2);
-    process::run()
+    process::run(&kernel)
 }
 
 #[cfg(not(test))]
@@ -36,18 +54,19 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 #[unsafe(no_mangle)]
 extern "C" fn kt_spawn(entry: usize) -> usize {
+    let kernel = kernel::active_kernel();
     let entry_fn: process::ProcessFn = unsafe { core::mem::transmute(entry) };
-    process::spawn(entry_fn)
+    process::spawn(kernel, entry_fn)
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn kt_has_pid(pid: usize) -> bool {
-    process::has_pid(pid)
+    process::has_pid(kernel::active_kernel(), pid)
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn kt_yield_now() {
-    process::yield_now()
+    process::yield_now(kernel::active_kernel())
 }
 
 #[unsafe(no_mangle)]
