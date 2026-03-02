@@ -27,9 +27,8 @@ impl PhysicalAddr {
         PhysicalAddr((self.0 + align - 1) & !(align - 1))
     }
 
-    pub const fn to_virtual(self) -> VirtualAddr {
-        assert!(self.0 < crate::memory::constants::MAX_PHYSICAL_ADDR);
-        VirtualAddr(self.0 + crate::memory::constants::DIRECT_MAP_OFFSET.0)
+    pub fn to_virtual(self, map: &impl DirectMap) -> VirtualAddr {
+        map.p2v(self)
     }
 }
 
@@ -59,18 +58,8 @@ impl VirtualAddr {
         VirtualAddr(self.0 + offset)
     }
 
-    pub const fn to_physical(self) -> Result<PhysicalAddr> {
-        if self.0 < crate::memory::constants::DIRECT_MAP_OFFSET.0
-            || self.0
-                > crate::memory::constants::DIRECT_MAP_OFFSET.0
-                    + crate::memory::constants::MAX_PHYSICAL_ADDR
-        {
-            Err(MemoryError::VirtualToPhysical { addr: self.0 })
-        } else {
-            Ok(PhysicalAddr(
-                self.0 - crate::memory::constants::DIRECT_MAP_OFFSET.0,
-            ))
-        }
+    pub fn to_physical(self, map: &impl DirectMap) -> Result<PhysicalAddr> {
+        map.v2p(self)
     }
 
     pub const fn pml4_index(self) -> usize {
@@ -98,5 +87,33 @@ impl VirtualAddr {
 impl Display for VirtualAddr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{:#018x}", self.0)
+    }
+}
+
+pub trait DirectMap {
+    fn p2v(&self, paddr: PhysicalAddr) -> VirtualAddr;
+    fn v2p(&self, vaddr: VirtualAddr) -> Result<PhysicalAddr>;
+}
+
+pub struct KernelDirectMap;
+
+impl DirectMap for KernelDirectMap {
+    fn p2v(&self, paddr: PhysicalAddr) -> VirtualAddr {
+        assert!(paddr.0 < crate::memory::constants::MAX_PHYSICAL_ADDR);
+        VirtualAddr(paddr.0 + crate::memory::constants::DIRECT_MAP_OFFSET.0)
+    }
+
+    fn v2p(&self, vaddr: VirtualAddr) -> Result<PhysicalAddr> {
+        if vaddr.0 < crate::memory::constants::DIRECT_MAP_OFFSET.0
+            || vaddr.0
+                > crate::memory::constants::DIRECT_MAP_OFFSET.0
+                    + crate::memory::constants::MAX_PHYSICAL_ADDR
+        {
+            Err(MemoryError::VirtualToPhysical { addr: vaddr.0 })
+        } else {
+            Ok(PhysicalAddr(
+                vaddr.0 - crate::memory::constants::DIRECT_MAP_OFFSET.0,
+            ))
+        }
     }
 }

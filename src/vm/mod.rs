@@ -5,6 +5,7 @@ mod x64;
 pub use self::error::{Error, Result};
 use kernel::{
     boot::{KERNEL_TEST_EXIT_FAILURE, KERNEL_TEST_EXIT_PORT, KERNEL_TEST_EXIT_SUCCESS, RunFlags},
+    memory::address::KernelDirectMap,
     memory::constants::{KERNEL_CODE_SIZE, KERNEL_CODE_VIRT, MAX_PHYSICAL_ADDR, RUN_FLAGS_PHYS},
 };
 use kvm_bindings::KVM_MAX_CPUID_ENTRIES;
@@ -40,7 +41,7 @@ impl Vm {
         let boot_mem: GuestMemoryMmap<()> =
             GuestMemoryMmap::from_ranges(&[(GUEST_BASE, MEM_SIZE)])?;
 
-        init_x64(&vm, &vcpus, &boot_mem, MEM_SIZE)?;
+        init_x64(&vm, &vcpus, &boot_mem, MEM_SIZE, &KernelDirectMap)?;
 
         let mut vm = Self {
             _kvm: kvm,

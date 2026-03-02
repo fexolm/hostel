@@ -86,22 +86,6 @@ impl PageAllocatorImpl {
     }
 }
 
-fn range_end_page(start_page: usize, pages: usize) -> Result<usize> {
-    let end_page = start_page
-        .checked_add(pages)
-        .ok_or(MemoryError::PhysicalPageOutOfRange { page: start_page })?;
-
-    if start_page >= PAGE_COUNT {
-        return Err(MemoryError::PhysicalPageOutOfRange { page: start_page });
-    }
-
-    if end_page > PAGE_COUNT {
-        return Err(MemoryError::PhysicalPageOutOfRange { page: end_page - 1 });
-    }
-
-    Ok(end_page)
-}
-
 pub struct PageAllocator(spin::Mutex<PageAllocatorImpl>);
 
 impl PageAllocator {

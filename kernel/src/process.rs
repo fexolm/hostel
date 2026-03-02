@@ -3,7 +3,10 @@ use core::ptr::{null, null_mut};
 
 use crate::Kernel;
 use crate::memory::{
-    address::PhysicalAddr, constants::PAGE_SIZE, errors::Result as MemoryResult, vmm::Vmm,
+    address::{DirectMap, PhysicalAddr},
+    constants::PAGE_SIZE,
+    errors::Result as MemoryResult,
+    vmm::Vmm,
 };
 use crate::scheduler::{Context, ExitPlan, MAX_PROCESSES, Scheduler, SwitchPlan};
 
@@ -11,22 +14,22 @@ const PROCESS_STACK_PAGES: usize = 1;
 
 pub type ProcessFn = fn();
 
-struct Process<'i> {
-    vmm: Vmm<'i>,
+struct Process<'i, DM: DirectMap> {
+    vmm: Vmm<'i, DM>,
     stack_base: PhysicalAddr,
     stack_pages: usize,
 }
 
-pub struct ProcessState<'i> {
-    inner: spin::Mutex<ProcessStateInner<'i>>,
+pub struct ProcessState<'i, DM: DirectMap> {
+    inner: spin::Mutex<ProcessStateInner<'i, DM>>,
 }
 
-struct ProcessStateInner<'i> {
+struct ProcessStateInner<'i, DM: DirectMap> {
     scheduler: Scheduler,
-    processes: [Option<Process<'i>>; MAX_PROCESSES],
+    processes: [Option<Process<'i, DM>>; MAX_PROCESSES],
 }
 
-impl<'i> ProcessState<'i> {
+impl<'i, DM: DirectMap> ProcessState<'i, DM> {
     pub fn new() -> Self {
         Self {
             inner: spin::Mutex::new(ProcessStateInner {
@@ -36,14 +39,16 @@ impl<'i> ProcessState<'i> {
         }
     }
 
-    fn spawn(&self, kernel: &Kernel<'i>, entry: ProcessFn) -> usize {
+    fn spawn(&self, kernel: &Kernel<'i, DM>, entry: ProcessFn) -> usize {
         let vmm = Vmm::new(kernel.page_table, kernel.kalloc).expect("create vmm");
         let stack_base = kernel
             .palloc
             .alloc(PROCESS_STACK_PAGES)
             .expect("allocate process stack");
 
-        let stack_top = stack_base.to_virtual().add(PAGE_SIZE * PROCESS_STACK_PAGES);
+        let stack_top = stack_base
+            .to_virtual(kernel.kalloc.direct_map())
+            .add(PAGE_SIZE * PROCESS_STACK_PAGES);
 
         // Keep SysV stack alignment for first frame (entry sees RSP % 16 == 8).
         let initial_rsp = stack_top.as_usize() - 2 * core::mem::size_of::<u64>();
@@ -71,7 +76,7 @@ impl<'i> ProcessState<'i> {
         self.inner.lock().scheduler.plan_yield()
     }
 
-    fn plan_exit_current(&self) -> (SwitchPlan, Process<'i>) {
+    fn plan_exit_current(&self) -> (SwitchPlan, Process<'i, DM>) {
         let mut inner = self.inner.lock();
         let ExitPlan {
             switch,
@@ -97,7 +102,7 @@ impl<'i> ProcessState<'i> {
 
     fn with_current_process_mut<T>(
         &self,
-        f: impl FnOnce(&mut Process<'i>) -> MemoryResult<T>,
+        f: impl FnOnce(&mut Process<'i, DM>) -> MemoryResult<T>,
     ) -> MemoryResult<T> {
         let mut inner = self.inner.lock();
         let current = inner.scheduler.current_slot().expect("no running process");
@@ -211,11 +216,11 @@ extern "C" fn process_trampoline() -> ! {
     terminate_current(kernel);
 }
 
-pub fn spawn(kernel: &Kernel<'_>, entry: ProcessFn) -> usize {
+pub fn spawn<DM: DirectMap>(kernel: &Kernel<'_, DM>, entry: ProcessFn) -> usize {
     kernel.process.spawn(kernel, entry)
 }
 
-pub fn yield_now(kernel: &Kernel<'_>) {
+pub fn yield_now<DM: DirectMap>(kernel: &Kernel<'_, DM>) {
     let plan = kernel.process.plan_yield();
     if let Some(plan) = plan {
         unsafe {
@@ -224,7 +229,7 @@ pub fn yield_now(kernel: &Kernel<'_>) {
     }
 }
 
-pub fn run(kernel: &Kernel<'_>) -> ! {
+pub fn run<DM: DirectMap>(kernel: &Kernel<'_, DM>) -> ! {
     loop {
         match kernel.process.plan_kernel_to_first() {
             Some(plan) => unsafe {
@@ -239,7 +244,7 @@ pub fn run(kernel: &Kernel<'_>) -> ! {
     }
 }
 
-fn exit_current(kernel: &Kernel<'_>) -> ! {
+fn exit_current<DM: DirectMap>(kernel: &Kernel<'_, DM>) -> ! {
     let (switch, process) = kernel.process.plan_exit_current();
     cleanup_process(kernel, process);
 
@@ -249,7 +254,7 @@ fn exit_current(kernel: &Kernel<'_>) -> ! {
     unreachable!("exit_current should never return");
 }
 
-fn cleanup_process(kernel: &Kernel<'_>, process: Process<'_>) {
+fn cleanup_process<DM: DirectMap>(kernel: &Kernel<'_, DM>, process: Process<'_, DM>) {
     drop(process.vmm);
 
     for page in 0..process.stack_pages {
@@ -260,25 +265,30 @@ fn cleanup_process(kernel: &Kernel<'_>, process: Process<'_>) {
     }
 }
 
-pub fn terminate_current(kernel: &Kernel<'_>) -> ! {
+pub fn terminate_current<DM: DirectMap>(kernel: &Kernel<'_, DM>) -> ! {
     exit_current(kernel)
 }
 
-pub fn current_pid(kernel: &Kernel<'_>) -> usize {
+pub fn current_pid<DM: DirectMap>(kernel: &Kernel<'_, DM>) -> usize {
     kernel.process.current_pid()
 }
 
-pub fn has_pid(kernel: &Kernel<'_>, pid: usize) -> bool {
+pub fn has_pid<DM: DirectMap>(kernel: &Kernel<'_, DM>, pid: usize) -> bool {
     kernel.process.has_pid(pid)
 }
 
-pub fn brk(kernel: &Kernel<'_>, requested: usize) -> MemoryResult<usize> {
+pub fn brk<DM: DirectMap>(kernel: &Kernel<'_, DM>, requested: usize) -> MemoryResult<usize> {
     kernel
         .process
         .with_current_process_mut(|proc| proc.vmm.brk(requested))
 }
 
-pub fn mmap(kernel: &Kernel<'_>, hint: usize, len: usize, flags: u64) -> MemoryResult<usize> {
+pub fn mmap<DM: DirectMap>(
+    kernel: &Kernel<'_, DM>,
+    hint: usize,
+    len: usize,
+    flags: u64,
+) -> MemoryResult<usize> {
     kernel
         .process
         .with_current_process_mut(|proc| proc.vmm.mmap(hint, len, flags))

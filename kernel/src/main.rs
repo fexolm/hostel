@@ -4,6 +4,7 @@
 use kernel::{
     Kernel, boot,
     memory::{
+        address::KernelDirectMap,
         alloc::{kmalloc::KernelAllocator, palloc::PageAllocator},
         constants::DIRECT_MAP_PML4,
         pagetable::RootPageTable,
@@ -12,10 +13,12 @@ use kernel::{
 };
 
 static PAGE_ALLOCATOR: PageAllocator = PageAllocator::new();
+static KERNEL_DIRECT_MAP: KernelDirectMap = KernelDirectMap;
 
-static KERNEL_ALLOCATOR: KernelAllocator = KernelAllocator::new(&PAGE_ALLOCATOR);
+static KERNEL_ALLOCATOR: KernelAllocator<KernelDirectMap> =
+    KernelAllocator::new(&KERNEL_DIRECT_MAP, &PAGE_ALLOCATOR);
 
-static KERNEL_PAGE_TABLE: RootPageTable =
+static KERNEL_PAGE_TABLE: RootPageTable<KernelDirectMap> =
     unsafe { RootPageTable::from_paddr(DIRECT_MAP_PML4, &KERNEL_ALLOCATOR) };
 
 #[unsafe(no_mangle)]
@@ -25,7 +28,7 @@ pub extern "C" fn _start() -> ! {
 
     kernel::console::init();
     syscall::init();
-    let run_flags = kernel::boot::read_run_flags();
+    let run_flags = kernel::boot::read_run_flags(&KERNEL_DIRECT_MAP);
 
     if run_flags.run_tests() {
         kernel::println!("kernel: boot (integration-tests)");
@@ -45,7 +48,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     kernel::console::init();
     kernel::println!("kernel panic: {}", info);
 
-    if kernel::boot::read_run_flags().run_tests() {
+    if kernel::boot::read_run_flags(&KERNEL_DIRECT_MAP).run_tests() {
         kernel::boot::signal_kernel_tests_failure();
     }
 

@@ -3,6 +3,7 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::memory::{
+    address::{DirectMap, KernelDirectMap},
     alloc::{kmalloc::KernelAllocator, palloc::PageAllocator},
     pagetable::RootPageTable,
 };
@@ -17,18 +18,18 @@ pub mod syscall;
 
 static ACTIVE_KERNEL: AtomicUsize = AtomicUsize::new(0);
 
-pub struct Kernel<'i> {
+pub struct Kernel<'i, DM: DirectMap> {
     pub palloc: &'i PageAllocator,
-    pub kalloc: &'i KernelAllocator<'i>,
-    pub page_table: &'i RootPageTable<'i>,
-    pub process: process::ProcessState<'i>,
+    pub kalloc: &'i KernelAllocator<'i, DM>,
+    pub page_table: &'i RootPageTable<'i, DM>,
+    pub process: process::ProcessState<'i, DM>,
 }
 
-impl<'i> Kernel<'i> {
+impl<'i, DM: DirectMap> Kernel<'i, DM> {
     pub fn new(
         palloc: &'i PageAllocator,
-        kalloc: &'i KernelAllocator<'i>,
-        page_table: &'i RootPageTable<'i>,
+        kalloc: &'i KernelAllocator<'i, DM>,
+        page_table: &'i RootPageTable<'i, DM>,
     ) -> Self {
         Self {
             palloc,
@@ -39,15 +40,15 @@ impl<'i> Kernel<'i> {
     }
 }
 
-pub fn set_active_kernel(kernel: &Kernel<'_>) {
-    let ptr = kernel as *const Kernel<'_> as usize;
+pub fn set_active_kernel(kernel: &Kernel<'_, KernelDirectMap>) {
+    let ptr = kernel as *const Kernel<'_, KernelDirectMap> as usize;
     ACTIVE_KERNEL.store(ptr, Ordering::SeqCst);
 }
 
-pub fn active_kernel<'i>() -> &'i Kernel<'i> {
+pub fn active_kernel<'i>() -> &'i Kernel<'i, KernelDirectMap> {
     let ptr = ACTIVE_KERNEL.load(Ordering::SeqCst);
     assert!(ptr != 0, "active kernel is not initialized");
-    unsafe { &*(ptr as *const Kernel<'i>) }
+    unsafe { &*(ptr as *const Kernel<'i, KernelDirectMap>) }
 }
 
 #[macro_export]

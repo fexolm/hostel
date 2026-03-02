@@ -1,5 +1,5 @@
 use crate::memory::{
-    address::{PhysicalAddr, VirtualAddr},
+    address::{DirectMap, PhysicalAddr, VirtualAddr},
     alloc::kmalloc::KernelAllocator,
     constants::PAGE_SIZE,
     errors::{MemoryError, Result},
@@ -11,20 +11,20 @@ const USER_MMAP_BASE: usize = 0x0000_0004_0000_0000;
 const USER_MMAP_LIMIT: usize = 0x0000_7000_0000_0000;
 const MAP_FIXED: u64 = 0x10;
 
-pub struct Vmm<'i> {
+pub struct Vmm<'i, DM: DirectMap> {
     heap_base: usize,
     brk: usize,
     brk_mapped_end: usize,
     mmap_base: usize,
     mmap_next: usize,
-    kalloc: &'i KernelAllocator<'i>,
-    page_table: RootPageTable<'i>,
+    kalloc: &'i KernelAllocator<'i, DM>,
+    page_table: RootPageTable<'i, DM>,
 }
 
-impl<'i> Vmm<'i> {
+impl<'i, DM: DirectMap> Vmm<'i, DM> {
     pub fn new(
-        kernel_page_table: &'i RootPageTable<'i>,
-        kalloc: &'i KernelAllocator<'i>,
+        kernel_page_table: &'i RootPageTable<'i, DM>,
+        kalloc: &'i KernelAllocator<'i, DM>,
     ) -> Result<Self> {
         Ok(Self {
             heap_base: USER_HEAP_BASE,

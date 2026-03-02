@@ -2,7 +2,7 @@ use core::ptr::copy_nonoverlapping;
 
 use crate::memory::alloc::kmalloc::KernelAllocator;
 use crate::memory::{
-    address::{PhysicalAddr, VirtualAddr},
+    address::{DirectMap, PhysicalAddr, VirtualAddr},
     constants::{DIRECT_MAP_OFFSET, PAGE_TABLE_ENTRIES, PAGE_TABLE_SIZE},
     errors::{MemoryError, Result},
 };
@@ -58,27 +58,31 @@ struct PageTable {
 }
 
 impl PageTable {
-    pub unsafe fn from_paddr_mut(paddr: PhysicalAddr) -> &'static mut Self {
-        unsafe { paddr.to_virtual().as_ref_mut::<Self>() }
+    pub unsafe fn from_paddr_mut(paddr: PhysicalAddr, map: &impl DirectMap) -> &'static mut Self {
+        unsafe { paddr.to_virtual(map).as_ref_mut::<Self>() }
     }
 
-    pub fn get(
+    pub fn get<DM: DirectMap>(
         &mut self,
         vaddr: VirtualAddr,
-        kalloc: &KernelAllocator,
+        kalloc: &KernelAllocator<DM>,
     ) -> Result<&mut PageTableEntry> {
         self.get_level(vaddr, PageTableLevel::Pml4, kalloc)
     }
 
-    pub fn get_if_present(&self, vaddr: VirtualAddr) -> Result<Option<PageTableEntry>> {
-        self.get_present_level(vaddr, PageTableLevel::Pml4)
+    pub fn get_if_present<DM: DirectMap>(
+        &self,
+        vaddr: VirtualAddr,
+        kalloc: &KernelAllocator<DM>,
+    ) -> Result<Option<PageTableEntry>> {
+        self.get_present_level(vaddr, PageTableLevel::Pml4, kalloc.direct_map())
     }
 
-    fn get_level(
+    fn get_level<DM: DirectMap>(
         &mut self,
         vaddr: VirtualAddr,
         level: PageTableLevel,
-        kalloc: &KernelAllocator,
+        kalloc: &KernelAllocator<DM>,
     ) -> Result<&mut PageTableEntry> {
         if level == PageTableLevel::Pd {
             return Ok(&mut self.entries[index_for(level, vaddr)]);
@@ -96,7 +100,7 @@ impl PageTable {
             });
         };
 
-        let child = unsafe { Self::from_paddr_mut(entry.addr()) };
+        let child = unsafe { Self::from_paddr_mut(entry.addr(), kalloc.direct_map()) };
         child.get_level(vaddr, next, kalloc)
     }
 
@@ -104,6 +108,7 @@ impl PageTable {
         &self,
         vaddr: VirtualAddr,
         level: PageTableLevel,
+        map: &impl DirectMap,
     ) -> Result<Option<PageTableEntry>> {
         let entry = self.entries[index_for(level, vaddr)];
 
@@ -119,15 +124,19 @@ impl PageTable {
             return Ok(None);
         };
 
-        let child = unsafe { Self::from_paddr_mut(entry.addr()) };
-        child.get_present_level(vaddr, next)
+        let child = unsafe { Self::from_paddr_mut(entry.addr(), map) };
+        child.get_present_level(vaddr, next, map)
     }
 
-    pub fn free(&mut self, kalloc: &KernelAllocator) -> Result<()> {
+    pub fn free<DM: DirectMap>(&mut self, kalloc: &KernelAllocator<DM>) -> Result<()> {
         self.free_level(PageTableLevel::Pml4, kalloc)
     }
 
-    fn free_level(&mut self, level: PageTableLevel, kalloc: &KernelAllocator) -> Result<()> {
+    fn free_level<DM: DirectMap>(
+        &mut self,
+        level: PageTableLevel,
+        kalloc: &KernelAllocator<DM>,
+    ) -> Result<()> {
         let end = if level == PageTableLevel::Pml4 {
             USER_PML4_LIMIT
         } else {
@@ -138,7 +147,7 @@ impl PageTable {
             for i in 0..end {
                 let entry = self.entries[i];
                 if entry.is_present() {
-                    let child = unsafe { Self::from_paddr_mut(entry.addr()) };
+                    let child = unsafe { Self::from_paddr_mut(entry.addr(), kalloc.direct_map()) };
                     child.free_level(next, kalloc)?;
                 }
             }
@@ -151,7 +160,7 @@ impl PageTable {
             }
         }
 
-        kalloc.free(self.self_vaddr().to_physical()?)?;
+        kalloc.free(self.self_vaddr().to_physical(kalloc.direct_map())?)?;
         Ok(())
     }
 
@@ -168,26 +177,27 @@ fn index_for(level: PageTableLevel, vaddr: VirtualAddr) -> usize {
     }
 }
 
-pub struct RootPageTable<'i> {
-    kalloc: &'i KernelAllocator<'i>,
+pub struct RootPageTable<'i, DM: DirectMap> {
+    kalloc: &'i KernelAllocator<'i, DM>,
     addr: PhysicalAddr,
 }
 
-impl<'i> RootPageTable<'i> {
+impl<'i, DM: DirectMap> RootPageTable<'i, DM> {
     pub fn new(
-        kernel_page_table: &'i RootPageTable<'i>,
-        kalloc: &'i KernelAllocator<'i>,
+        kernel_page_table: &'i RootPageTable<'i, DM>,
+        kalloc: &'i KernelAllocator<'i, DM>,
     ) -> Result<Self> {
         let addr: PhysicalAddr = kalloc.calloc(PAGE_TABLE_SIZE)?;
+        let map = kalloc.direct_map();
 
         unsafe {
             copy_nonoverlapping(
                 kernel_page_table
                     .addr
-                    .to_virtual()
+                    .to_virtual(map)
                     .as_ptr::<usize>()
                     .add(USER_PML4_LIMIT),
-                addr.to_virtual().as_ptr::<usize>().add(USER_PML4_LIMIT),
+                addr.to_virtual(map).as_ptr::<usize>().add(USER_PML4_LIMIT),
                 PAGE_TABLE_ENTRIES - USER_PML4_LIMIT,
             );
         }
@@ -195,7 +205,10 @@ impl<'i> RootPageTable<'i> {
         unsafe { Ok(Self::from_paddr(addr, kalloc)) }
     }
 
-    pub const unsafe fn from_paddr(addr: PhysicalAddr, kalloc: &'i KernelAllocator<'i>) -> Self {
+    pub const unsafe fn from_paddr(
+        addr: PhysicalAddr,
+        kalloc: &'i KernelAllocator<'i, DM>,
+    ) -> Self {
         Self { kalloc, addr }
     }
 
@@ -208,15 +221,15 @@ impl<'i> RootPageTable<'i> {
     }
 
     pub fn get_if_present(&self, addr: VirtualAddr) -> Result<Option<PageTableEntry>> {
-        self.get_pml4().get_if_present(addr)
+        self.get_pml4().get_if_present(addr, self.kalloc)
     }
 
     fn get_pml4(&self) -> &mut PageTable {
-        unsafe { PageTable::from_paddr_mut(self.addr) }
+        unsafe { PageTable::from_paddr_mut(self.addr, self.kalloc.direct_map()) }
     }
 }
 
-impl Drop for RootPageTable<'_> {
+impl<DM: DirectMap> Drop for RootPageTable<'_, DM> {
     fn drop(&mut self) {
         self.get_pml4().free(self.kalloc).unwrap();
     }

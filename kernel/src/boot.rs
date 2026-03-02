@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use crate::memory::constants::RUN_FLAGS_PHYS;
+use crate::memory::{address::DirectMap, constants::RUN_FLAGS_PHYS};
 
 pub const KERNEL_TEST_EXIT_PORT: u16 = 0xF4;
 pub const KERNEL_TEST_EXIT_SUCCESS: u32 = 0x10;
@@ -43,8 +43,8 @@ impl RunFlags {
     }
 }
 
-pub fn read_run_flags() -> RunFlags {
-    let flags_addr = RUN_FLAGS_PHYS.to_virtual();
+pub fn read_run_flags(map: &impl DirectMap) -> RunFlags {
+    let flags_addr = RUN_FLAGS_PHYS.to_virtual(map);
     let raw = unsafe { core::ptr::read_volatile(flags_addr.as_ptr::<u64>() as *const u64) };
     RunFlags::from_bits(raw)
 }

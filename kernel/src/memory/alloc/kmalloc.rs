@@ -1,9 +1,9 @@
 use core::ptr::write_bytes;
 
 use crate::memory::{
-    address::{PhysicalAddr, VirtualAddr},
+    address::{DirectMap, PhysicalAddr},
     alloc::palloc::PageAllocator,
-    constants::{DIRECT_MAP_OFFSET, PAGE_SIZE},
+    constants::PAGE_SIZE,
     errors::{MemoryError, Result},
 };
 
@@ -71,18 +71,20 @@ impl LargeAlloc {
     }
 }
 
-struct KernelAllocatorImpl<'i> {
+struct KernelAllocatorImpl<'i, DM: DirectMap> {
     small: [SizeClass; SMALL_CLASS_COUNT],
     large: [LargeAlloc; MAX_LARGE_ALLOCS],
     palloc: &'i PageAllocator,
+    dm: &'i DM,
 }
 
-impl<'i> KernelAllocatorImpl<'i> {
-    const fn new(page_alloc: &'i PageAllocator) -> Self {
+impl<'i, DM: DirectMap> KernelAllocatorImpl<'i, DM> {
+    const fn new(dm: &'i DM, page_alloc: &'i PageAllocator) -> Self {
         Self {
             small: build_small_classes(),
             large: [LargeAlloc::empty(); MAX_LARGE_ALLOCS],
             palloc: page_alloc,
+            dm,
         }
     }
 
@@ -94,6 +96,16 @@ impl<'i> KernelAllocatorImpl<'i> {
         } else {
             self.alloc_large(class_size)
         }
+    }
+
+    fn calloc(&mut self, size: usize) -> Result<PhysicalAddr> {
+        let addr = self.alloc(size)?;
+
+        unsafe {
+            write_bytes(addr.to_virtual(self.dm).as_ptr::<u8>(), 0, size);
+        }
+
+        Ok(addr)
     }
 
     fn free(&mut self, ptr: PhysicalAddr) -> Result<()> {
@@ -111,14 +123,14 @@ impl<'i> KernelAllocatorImpl<'i> {
 
         for slab in &mut class.slabs {
             if slab.in_use && slab.free_count > 0 {
-                return alloc_from_small_slab(slab);
+                return alloc_from_small_slab(slab, self.dm);
             }
         }
 
         for slab in &mut class.slabs {
             if !slab.in_use {
-                init_small_slab(palloc, slab, class.block_size)?;
-                return alloc_from_small_slab(slab);
+                init_small_slab(palloc, slab, class.block_size, self.dm)?;
+                return alloc_from_small_slab(slab, self.dm);
             }
         }
 
@@ -153,7 +165,7 @@ impl<'i> KernelAllocatorImpl<'i> {
 
                 let idx = (offset / block_size) as u32;
                 unsafe {
-                    *small_slab_link_ptr(slab, idx) = slab.free_head;
+                    *small_slab_link_ptr(slab, idx, self.dm) = slab.free_head;
                 }
                 slab.free_head = idx;
                 slab.free_count += 1;
@@ -209,7 +221,12 @@ impl<'i> KernelAllocatorImpl<'i> {
     }
 }
 
-fn init_small_slab(palloc: &PageAllocator, slab: &mut Slab, block_size: u32) -> Result<()> {
+fn init_small_slab(
+    palloc: &PageAllocator,
+    slab: &mut Slab,
+    block_size: u32,
+    dm: &impl DirectMap,
+) -> Result<()> {
     let base = palloc.alloc(1)?;
     let capacity = PAGE_SIZE as u32 / block_size;
     if capacity == 0 {
@@ -233,7 +250,7 @@ fn init_small_slab(palloc: &PageAllocator, slab: &mut Slab, block_size: u32) -> 
             FREE_LIST_END
         };
         unsafe {
-            *small_slab_link_ptr(slab, i) = next;
+            *small_slab_link_ptr(slab, i, dm) = next;
         }
         i += 1;
     }
@@ -267,13 +284,13 @@ fn size_to_class(size: usize) -> Result<usize> {
     Ok(class_size)
 }
 
-fn alloc_from_small_slab(slab: &mut Slab) -> Result<PhysicalAddr> {
+fn alloc_from_small_slab(slab: &mut Slab, dm: &impl DirectMap) -> Result<PhysicalAddr> {
     let idx = slab.free_head;
     if idx == FREE_LIST_END {
         return Err(MemoryError::SlabEmpty);
     }
 
-    let next = unsafe { *small_slab_link_ptr(slab, idx) };
+    let next = unsafe { *small_slab_link_ptr(slab, idx, dm) };
     slab.free_head = next;
     slab.free_count -= 1;
 
@@ -281,16 +298,16 @@ fn alloc_from_small_slab(slab: &mut Slab) -> Result<PhysicalAddr> {
     Ok(slab.base.add(offset))
 }
 
-unsafe fn small_slab_link_ptr(slab: &Slab, idx: u32) -> *mut u32 {
+unsafe fn small_slab_link_ptr(slab: &Slab, idx: u32, map: &impl DirectMap) -> *mut u32 {
     let addr = slab.base.as_usize() + idx as usize * slab.block_size as usize;
-    PhysicalAddr::new(addr).to_virtual().as_ptr::<u32>()
+    PhysicalAddr::new(addr).to_virtual(map).as_ptr::<u32>()
 }
 
-pub struct KernelAllocator<'i>(spin::Mutex<KernelAllocatorImpl<'i>>);
+pub struct KernelAllocator<'i, DM: DirectMap>(spin::Mutex<KernelAllocatorImpl<'i, DM>>);
 
-impl<'i> KernelAllocator<'i> {
-    pub const fn new(palloc: &'i PageAllocator) -> Self {
-        Self(spin::Mutex::new(KernelAllocatorImpl::new(palloc)))
+impl<'i, DM: DirectMap> KernelAllocator<'i, DM> {
+    pub const fn new(dm: &'i DM, palloc: &'i PageAllocator) -> Self {
+        Self(spin::Mutex::new(KernelAllocatorImpl::new(dm, palloc)))
     }
 
     pub fn alloc(&self, size: usize) -> Result<PhysicalAddr> {
@@ -302,18 +319,18 @@ impl<'i> KernelAllocator<'i> {
     }
 
     pub fn calloc(&self, size: usize) -> Result<PhysicalAddr> {
-        let addr = self.alloc(size)?;
+        self.0.lock().calloc(size)
+    }
 
-        unsafe {
-            write_bytes(addr.to_virtual().as_ptr::<u8>(), 0, size);
-        }
-
-        Ok(addr)
+    pub fn direct_map(&self) -> &'i DM {
+        self.0.lock().dm
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::memory::address::KernelDirectMap;
+
     use super::*;
 
     #[test]
@@ -346,8 +363,9 @@ mod tests {
 
     #[test]
     fn kmalloc_large_is_contiguous_and_reused() {
+        let dm = KernelDirectMap;
         let page_alloc = Box::new(PageAllocator::new());
-        let alloc = Box::new(KernelAllocator::new(&page_alloc));
+        let alloc = Box::new(KernelAllocator::new(&dm, &page_alloc));
 
         let a = alloc.alloc((1 << 22) + 1).unwrap(); // rounds to 8 MiB
         let b = alloc.alloc(1 << 22).unwrap(); // 4 MiB
@@ -362,8 +380,9 @@ mod tests {
 
     #[test]
     fn kmalloc_large_allocations_do_not_overlap() {
+        let dm = KernelDirectMap;
         let page_alloc = Box::new(PageAllocator::new());
-        let alloc = Box::new(KernelAllocator::new(&page_alloc));
+        let alloc = Box::new(KernelAllocator::new(&dm, &page_alloc));
 
         let a = alloc.alloc(1 << 22).unwrap(); // 4 MiB
         let b = alloc.alloc(1 << 22).unwrap(); // 4 MiB
@@ -378,8 +397,9 @@ mod tests {
 
     #[test]
     fn kmalloc_large_free_and_realloc_same_class_reuses_address() {
+        let dm = KernelDirectMap;
         let page_alloc = Box::new(PageAllocator::new());
-        let alloc = Box::new(KernelAllocator::new(&page_alloc));
+        let alloc = Box::new(KernelAllocator::new(&dm, &page_alloc));
 
         let a = alloc.alloc(1 << 24).unwrap(); // 16 MiB
         let b = alloc.alloc(1 << 24).unwrap(); // 16 MiB

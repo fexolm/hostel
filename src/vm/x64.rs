@@ -1,4 +1,5 @@
 use crate::vm::Result;
+use kernel::memory::address::DirectMap;
 use kernel::memory::constants::{
     DIRECT_MAP_PD, DIRECT_MAP_PD_COUNT, DIRECT_MAP_PDPT, DIRECT_MAP_PDPT_COUNT, DIRECT_MAP_PML4,
     DIRECT_MAP_PML4_ENTRIES_COUNT, DIRECT_MAP_PML4_OFFSET, KERNEL_CODE_PD, KERNEL_CODE_PDPD,
@@ -41,6 +42,7 @@ pub fn init_x64(
     vcpus: &[kvm_ioctls::VcpuFd],
     boot_mem: &GuestMemoryMmap<()>,
     mem_size: usize,
+    direct_map: &impl DirectMap,
 ) -> Result<()> {
     // map direct map region
     for i in 0..DIRECT_MAP_PML4_ENTRIES_COUNT {
@@ -106,7 +108,7 @@ pub fn init_x64(
     // _start is entered without a CALL frame; keep SysV ABI expectation
     // (RSP % 16 == 8 on function entry) so local variables that require
     // 16-byte alignment remain aligned after prologue.
-    regs.rsp = KERNEL_STACK.to_virtual().as_u64() - 8;
+    regs.rsp = KERNEL_STACK.to_virtual(direct_map).as_u64() - 8;
     regs.rflags = RFLAGS_RESERVED; // required reserved bit
     vcpus[0].set_regs(&regs)?;
 
