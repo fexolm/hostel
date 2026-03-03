@@ -152,7 +152,7 @@ impl<'i, DM: DirectMap> Vmm<'i, DM> {
     fn map_user_page(&mut self, vaddr: usize) -> Result<()> {
         let paddr = self.kalloc.alloc(PAGE_SIZE)?;
         if let Err(err) = self.map_user_memory(paddr, VirtualAddr::new(vaddr)) {
-            self.kalloc.free(paddr)?;
+            self.kalloc.free(paddr, PAGE_SIZE)?;
             return Err(err);
         }
         Ok(())

@@ -314,7 +314,7 @@ impl<'i, DM: DirectMap> KernelAllocator<'i, DM> {
         self.0.lock().alloc(size)
     }
 
-    pub fn free(&self, ptr: PhysicalAddr) -> Result<()> {
+    pub fn free(&self, ptr: PhysicalAddr, _size: usize) -> Result<()> {
         self.0.lock().free(ptr)
     }
 
@@ -373,7 +373,7 @@ mod tests {
         assert_eq!(a.as_usize() % PAGE_SIZE, 0);
         assert_eq!(b.as_usize() % PAGE_SIZE, 0);
 
-        alloc.free(a).unwrap();
+        alloc.free(a, (1 << 22) + 1).unwrap();
         let c = alloc.alloc(1 << 23).unwrap();
         assert_eq!(c.as_u64(), a.as_u64());
     }
@@ -405,7 +405,7 @@ mod tests {
         let b = alloc.alloc(1 << 24).unwrap(); // 16 MiB
         assert_ne!(a.as_u64(), b.as_u64());
 
-        alloc.free(b).unwrap();
+        alloc.free(b, 1 << 24).unwrap();
         let c = alloc.alloc(1 << 24).unwrap();
         assert_eq!(c.as_u64(), b.as_u64());
     }

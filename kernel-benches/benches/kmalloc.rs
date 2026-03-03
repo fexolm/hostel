@@ -1,4 +1,4 @@
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::hint::black_box;
 
 use kernel::memory::address::{DirectMap, PhysicalAddr, VirtualAddr};
@@ -47,14 +47,19 @@ pub fn bench_kmalloc_small(c: &mut Criterion) {
 
     for &size in [8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096].iter() {
         let object_count = 2048;
-        let mut ptr_vec: Vec<u32> = vec![0; object_count];
+        let mut ptr_vec: Vec<(u32, u32)> = vec![(0, 0); object_count];
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             b.iter(|| {
                 for i in 0..object_count {
-                    ptr_vec[i] = kmalloc.alloc(black_box(size)).unwrap().as_usize() as u32;
+                    ptr_vec[i] = (
+                        kmalloc.alloc(black_box(size)).unwrap().as_usize() as u32,
+                        size as u32,
+                    );
                 }
-                for &ptr in ptr_vec.iter() {
-                    kmalloc.free(PhysicalAddr::new(ptr as usize)).unwrap();
+                for &(ptr, size) in ptr_vec.iter() {
+                    kmalloc
+                        .free(PhysicalAddr::new(ptr as usize), size as usize)
+                        .unwrap();
                 }
             });
         });
@@ -72,14 +77,19 @@ pub fn bench_kmalloc_large(c: &mut Criterion) {
     for &size in [16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024, 256 * 1024].iter() {
         // 16 KiB to 256 KiB
         let object_count = 2048;
-        let mut ptr_vec: Vec<u32> = vec![0; object_count];
+        let mut ptr_vec: Vec<(u32, u32)> = vec![(0, 0); object_count];
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             b.iter(|| {
                 for i in 0..object_count {
-                    ptr_vec[i] = kmalloc.alloc(black_box(size)).unwrap().as_usize() as u32;
+                    ptr_vec[i] = (
+                        kmalloc.alloc(black_box(size)).unwrap().as_usize() as u32,
+                        size as u32,
+                    );
                 }
-                for &ptr in ptr_vec.iter() {
-                    kmalloc.free(PhysicalAddr::new(ptr as usize)).unwrap();
+                for &(ptr, size) in ptr_vec.iter() {
+                    kmalloc
+                        .free(PhysicalAddr::new(ptr as usize), size as usize)
+                        .unwrap();
                 }
             });
         });
@@ -90,16 +100,16 @@ pub fn bench_kmalloc_large(c: &mut Criterion) {
 
 #[derive(Debug, Clone, Copy)]
 struct XorShift32 {
-    a: u32,
+    a: usize,
 }
 
 impl XorShift32 {
-    fn new(seed: u32) -> Self {
+    fn new(seed: usize) -> Self {
         assert!(seed != 0, "Seed must be non-zero!");
         XorShift32 { a: seed }
     }
 
-    fn next(&mut self) -> u32 {
+    fn next(&mut self) -> usize {
         let mut x = self.a;
         x ^= x << 13;
         x ^= x >> 17;
@@ -116,15 +126,20 @@ pub fn bench_kmalloc_mixed(c: &mut Criterion) {
     let kmalloc = KernelAllocator::new(&dm, &page_alloc);
     let mut group = c.benchmark_group("kmalloc_mixed");
     let object_count = 2048;
-    let mut ptr_vec: Vec<u32> = vec![0; object_count];
+    let mut ptr_vec: Vec<(u32, u32)> = vec![(0, 0); object_count];
     group.bench_function("kmalloc_mixed", |b| {
         b.iter(|| {
             for i in 0..object_count {
-                let size = rng.next() as usize;
-                ptr_vec[i] = kmalloc.alloc(black_box(size)).unwrap().as_usize() as u32;
+                let size = rng.next();
+                ptr_vec[i] = (
+                    kmalloc.alloc(black_box(size)).unwrap().as_usize() as u32,
+                    size as u32,
+                );
             }
-            for &ptr in ptr_vec.iter() {
-                kmalloc.free(PhysicalAddr::new(ptr as usize)).unwrap();
+            for &(ptr, size) in ptr_vec.iter() {
+                kmalloc
+                    .free(PhysicalAddr::new(ptr as usize), size as usize)
+                    .unwrap();
             }
         });
     });
@@ -146,35 +161,40 @@ pub fn bench_kmalloc_lifecycle(c: &mut Criterion) {
     let kmalloc = KernelAllocator::new(&dm, &page_alloc);
     let mut group = c.benchmark_group("kmalloc_lifecycle");
     let object_count = 2048;
-    let mut ptr_vec: Vec<u32> = vec![0; object_count];
+    let mut ptr_vec: Vec<(u32, u32)> = vec![(0, 0); object_count];
     group.bench_function("kmalloc_lifecycle", |b| {
         b.iter(|| {
             for i in 0..(object_count / 2) {
-                ptr_vec[i] = kmalloc
-                    .alloc(black_box(pseudo_size(i as u64)) as usize)
-                    .unwrap()
-                    .as_usize() as u32;
+                let size = pseudo_size(i as u64);
+                ptr_vec[i] = (
+                    kmalloc.alloc(black_box(size) as usize).unwrap().as_usize() as u32,
+                    size as u32,
+                );
             }
             for i in 0..(object_count / 4) {
+                let (ptr, size) = ptr_vec[i];
                 kmalloc
-                    .free(PhysicalAddr::new(ptr_vec[i] as usize))
+                    .free(PhysicalAddr::new(ptr as usize), size as usize)
                     .unwrap();
             }
             for i in 0..(object_count / 4) {
-                ptr_vec[i] = kmalloc
-                    .alloc(black_box(pseudo_size(i as u64)) as usize)
-                    .unwrap()
-                    .as_usize() as u32;
+                let size = pseudo_size(i as u64);
+                ptr_vec[i] = (
+                    kmalloc.alloc(black_box(size) as usize).unwrap().as_usize() as u32,
+                    size as u32,
+                );
             }
             for i in (object_count / 2)..object_count {
-                ptr_vec[i] = kmalloc
-                    .alloc(black_box(pseudo_size(i as u64)) as usize)
-                    .unwrap()
-                    .as_usize() as u32;
+                let size = pseudo_size(i as u64);
+                ptr_vec[i] = (
+                    kmalloc.alloc(black_box(size) as usize).unwrap().as_usize() as u32,
+                    size as u32,
+                );
             }
             for i in 0..object_count {
+                let (ptr, size) = ptr_vec[i];
                 kmalloc
-                    .free(PhysicalAddr::new(ptr_vec[i] as usize))
+                    .free(PhysicalAddr::new(ptr as usize), size as usize)
                     .unwrap();
             }
         });
@@ -189,27 +209,31 @@ pub fn bench_kmalloc_alloc_free(c: &mut Criterion) {
     let kmalloc = KernelAllocator::new(&dm, &page_alloc);
     let mut group = c.benchmark_group("kmalloc_alloc_free");
     let object_count = 2048;
-    let mut ptr_vec: Vec<u32> = vec![0; object_count];
+    let mut ptr_vec: Vec<(u32, u32)> = vec![(0, 0); object_count];
     group.bench_function("kmalloc_alloc_free", |b| {
         b.iter(|| {
             for i in 0..object_count {
-                ptr_vec[i] = kmalloc
-                    .alloc(black_box(pseudo_size(i as u64)) as usize)
-                    .unwrap()
-                    .as_usize() as u32;
+                let size = pseudo_size(i as u64);
+                ptr_vec[i] = (
+                    kmalloc.alloc(black_box(size) as usize).unwrap().as_usize() as u32,
+                    size as u32,
+                );
             }
             for i in 0..object_count {
+                let (ptr, size) = ptr_vec[i];
                 kmalloc
-                    .free(PhysicalAddr::new(ptr_vec[i] as usize))
+                    .free(PhysicalAddr::new(ptr as usize), size as usize)
                     .unwrap();
-                ptr_vec[i] = kmalloc
-                    .alloc(black_box(pseudo_size(i as u64)) as usize)
-                    .unwrap()
-                    .as_usize() as u32;
+                let size = pseudo_size(i as u64);
+                ptr_vec[i] = (
+                    kmalloc.alloc(black_box(size) as usize).unwrap().as_usize() as u32,
+                    size as u32,
+                );
             }
             for i in 0..object_count {
+                let (ptr, size) = ptr_vec[i];
                 kmalloc
-                    .free(PhysicalAddr::new(ptr_vec[i] as usize))
+                    .free(PhysicalAddr::new(ptr as usize), size as usize)
                     .unwrap();
             }
         });
