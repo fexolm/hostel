@@ -12,7 +12,7 @@ const MAX_SHIFT: u32 = 24; // 16 MiB
 const MIN_ALLOC_SIZE: usize = 1 << MIN_SHIFT;
 const MAX_ALLOC_SIZE: usize = 1 << MAX_SHIFT;
 const SMALL_CLASS_COUNT: usize = 12; // 1 KiB .. 2 MiB
-const MAX_SLABS_PER_CLASS: usize = 128;
+const MAX_SLABS_PER_CLASS: usize = 512;
 const MAX_LARGE_ALLOCS: usize = 256;
 const FREE_LIST_END: u32 = u32::MAX;
 
