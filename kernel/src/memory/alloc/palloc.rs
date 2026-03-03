@@ -112,10 +112,13 @@ mod tests {
         let first_page = PALLOC_FIRST_PAGE.as_usize();
         let addr1 = allocator.alloc(1).unwrap();
         let addr2 = allocator.alloc(1).unwrap();
-        assert_eq!(addr1, PhysicalAddr::new(first_page));
-        assert_eq!(addr2, PhysicalAddr::new(first_page + PAGE_SIZE));
+        assert_eq!(addr1, PhysicalAddr::new_page_aligned(first_page));
+        assert_eq!(
+            addr2,
+            PhysicalAddr::new_page_aligned(first_page + PAGE_SIZE)
+        );
         allocator.free(addr1).unwrap();
         let addr3 = allocator.alloc(1).unwrap();
-        assert_eq!(addr3, PhysicalAddr::new(first_page)); // should reuse the freed page
+        assert_eq!(addr3, PhysicalAddr::new_page_aligned(first_page)); // should reuse the freed page
     }
 }

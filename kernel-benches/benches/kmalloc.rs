@@ -1,8 +1,8 @@
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
 
-use kernel::memory::alloc::{palloc::PageAllocator, kmalloc::KernelAllocator};
 use kernel::memory::address::{DirectMap, PhysicalAddr, VirtualAddr};
+use kernel::memory::alloc::{kmalloc::KernelAllocator, palloc::PageAllocator};
 use kernel::memory::errors::{MemoryError, Result};
 
 pub struct VecDirectMap {
@@ -11,7 +11,9 @@ pub struct VecDirectMap {
 
 impl VecDirectMap {
     pub fn new(size: usize) -> Self {
-        Self { mem: vec![0u8; size] }
+        Self {
+            mem: vec![0u8; size],
+        }
     }
 
     pub fn as_ptr(&self) -> *const u8 {
@@ -27,11 +29,12 @@ impl DirectMap for VecDirectMap {
     fn v2p(&self, vaddr: VirtualAddr) -> Result<PhysicalAddr> {
         let virt = vaddr.as_usize();
         if virt < self.as_ptr() as usize {
-            return Err(MemoryError::VirtualToPhysical { addr: vaddr.as_usize() });
+            return Err(MemoryError::VirtualToPhysical {
+                addr: vaddr.as_usize(),
+            });
         }
         Ok(PhysicalAddr::new(virt - self.as_ptr() as usize))
     }
-    
 }
 
 pub const ALLOC_SIZE: usize = 1 << 32; // 4 GiB
@@ -66,7 +69,8 @@ pub fn bench_kmalloc_large(c: &mut Criterion) {
     let kmalloc = KernelAllocator::new(&dm, &page_alloc);
     let mut group = c.benchmark_group("kmalloc_large");
 
-    for &size in [16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024, 256 * 1024].iter() { // 16 KiB to 256 KiB
+    for &size in [16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024, 256 * 1024].iter() {
+        // 16 KiB to 256 KiB
         let object_count = 2048;
         let mut ptr_vec: Vec<u32> = vec![0; object_count];
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
@@ -145,20 +149,33 @@ pub fn bench_kmalloc_lifecycle(c: &mut Criterion) {
     let mut ptr_vec: Vec<u32> = vec![0; object_count];
     group.bench_function("kmalloc_lifecycle", |b| {
         b.iter(|| {
-            for i in 0..(object_count/2) {
-                ptr_vec[i] = kmalloc.alloc(black_box(pseudo_size(i as u64)) as usize).unwrap().as_usize() as u32;
+            for i in 0..(object_count / 2) {
+                ptr_vec[i] = kmalloc
+                    .alloc(black_box(pseudo_size(i as u64)) as usize)
+                    .unwrap()
+                    .as_usize() as u32;
             }
-            for i in 0..(object_count/4) {
-                kmalloc.free(PhysicalAddr::new(ptr_vec[i] as usize)).unwrap();
+            for i in 0..(object_count / 4) {
+                kmalloc
+                    .free(PhysicalAddr::new(ptr_vec[i] as usize))
+                    .unwrap();
             }
-            for i in 0..(object_count/4) {
-                ptr_vec[i] = kmalloc.alloc(black_box(pseudo_size(i as u64)) as usize).unwrap().as_usize() as u32;
+            for i in 0..(object_count / 4) {
+                ptr_vec[i] = kmalloc
+                    .alloc(black_box(pseudo_size(i as u64)) as usize)
+                    .unwrap()
+                    .as_usize() as u32;
             }
-            for i in (object_count/2)..object_count {
-                ptr_vec[i] = kmalloc.alloc(black_box(pseudo_size(i as u64)) as usize).unwrap().as_usize() as u32;
+            for i in (object_count / 2)..object_count {
+                ptr_vec[i] = kmalloc
+                    .alloc(black_box(pseudo_size(i as u64)) as usize)
+                    .unwrap()
+                    .as_usize() as u32;
             }
             for i in 0..object_count {
-                kmalloc.free(PhysicalAddr::new(ptr_vec[i] as usize)).unwrap();
+                kmalloc
+                    .free(PhysicalAddr::new(ptr_vec[i] as usize))
+                    .unwrap();
             }
         });
     });
@@ -176,21 +193,30 @@ pub fn bench_kmalloc_alloc_free(c: &mut Criterion) {
     group.bench_function("kmalloc_alloc_free", |b| {
         b.iter(|| {
             for i in 0..object_count {
-                ptr_vec[i] = kmalloc.alloc(black_box(pseudo_size(i as u64)) as usize).unwrap().as_usize() as u32;
+                ptr_vec[i] = kmalloc
+                    .alloc(black_box(pseudo_size(i as u64)) as usize)
+                    .unwrap()
+                    .as_usize() as u32;
             }
             for i in 0..object_count {
-                kmalloc.free(PhysicalAddr::new(ptr_vec[i] as usize)).unwrap();
-                ptr_vec[i] = kmalloc.alloc(black_box(pseudo_size(i as u64)) as usize).unwrap().as_usize() as u32;
+                kmalloc
+                    .free(PhysicalAddr::new(ptr_vec[i] as usize))
+                    .unwrap();
+                ptr_vec[i] = kmalloc
+                    .alloc(black_box(pseudo_size(i as u64)) as usize)
+                    .unwrap()
+                    .as_usize() as u32;
             }
             for i in 0..object_count {
-                kmalloc.free(PhysicalAddr::new(ptr_vec[i] as usize)).unwrap();
+                kmalloc
+                    .free(PhysicalAddr::new(ptr_vec[i] as usize))
+                    .unwrap();
             }
         });
     });
 
     group.finish();
 }
-
 
 criterion_group!(
     benches,

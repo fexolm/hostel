@@ -7,7 +7,7 @@ pub struct PhysicalAddr(usize);
 
 impl PhysicalAddr {
     pub const fn new(addr: usize) -> Self {
-        Self(addr & !0xFFF)
+        Self(addr)
     }
 
     pub const fn as_u64(self) -> u64 {
