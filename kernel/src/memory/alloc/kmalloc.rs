@@ -14,16 +14,32 @@ const MAX_ALLOC_SIZE: usize = 1 << MAX_SHIFT;
 const SMALL_CLASS_COUNT: usize = 12; // 1 KiB .. 2 MiB
 const MAX_SLABS_PER_CLASS: usize = 512;
 const MAX_LARGE_ALLOCS: usize = 256;
-const FREE_LIST_END: u32 = u32::MAX;
+const FREE_LIST_END: u16 = u16::MAX;
+const PAGE_MASK: usize = !(PAGE_SIZE - 1);
+const SMALL_SLAB_MAP_SIZE: usize = 4096;
+
+const SMALL_CLASS_SIZES: [u32; SMALL_CLASS_COUNT] = [
+    1 << 10,
+    1 << 11,
+    1 << 12,
+    1 << 13,
+    1 << 14,
+    1 << 15,
+    1 << 16,
+    1 << 17,
+    1 << 18,
+    1 << 19,
+    1 << 20,
+    1 << 21,
+];
 
 #[derive(Clone, Copy)]
 struct Slab {
     in_use: bool,
     base: PhysicalAddr,
-    block_size: u32,
-    capacity: u32,
-    free_count: u32,
-    free_head: u32,
+    capacity: u16,
+    free_count: u16,
+    free_head: u16,
 }
 
 impl Slab {
@@ -31,7 +47,6 @@ impl Slab {
         Self {
             in_use: false,
             base: PhysicalAddr::new(0),
-            block_size: 0,
             capacity: 0,
             free_count: 0,
             free_head: FREE_LIST_END,
@@ -43,6 +58,7 @@ impl Slab {
 struct SizeClass {
     block_size: u32,
     slabs: [Slab; MAX_SLABS_PER_CLASS],
+    last_alloc_slab: usize,
 }
 
 impl SizeClass {
@@ -50,6 +66,7 @@ impl SizeClass {
         Self {
             block_size,
             slabs: [Slab::empty(); MAX_SLABS_PER_CLASS],
+            last_alloc_slab: 0,
         }
     }
 }
@@ -71,8 +88,26 @@ impl LargeAlloc {
     }
 }
 
+#[derive(Clone, Copy)]
+struct SmallSlabMapEntry {
+    key_page_plus_one: u32,
+    value: u16,
+    _reserved: u16,
+}
+
+impl SmallSlabMapEntry {
+    const fn empty() -> Self {
+        Self {
+            key_page_plus_one: 0,
+            value: 0,
+            _reserved: 0,
+        }
+    }
+}
+
 struct KernelAllocatorImpl<'i, DM: DirectMap> {
     small: [SizeClass; SMALL_CLASS_COUNT],
+    small_slab_map: [SmallSlabMapEntry; SMALL_SLAB_MAP_SIZE],
     large: [LargeAlloc; MAX_LARGE_ALLOCS],
     palloc: &'i PageAllocator,
     dm: &'i DM,
@@ -82,6 +117,7 @@ impl<'i, DM: DirectMap> KernelAllocatorImpl<'i, DM> {
     const fn new(dm: &'i DM, page_alloc: &'i PageAllocator) -> Self {
         Self {
             small: build_small_classes(),
+            small_slab_map: [SmallSlabMapEntry::empty(); SMALL_SLAB_MAP_SIZE],
             large: [LargeAlloc::empty(); MAX_LARGE_ALLOCS],
             palloc: page_alloc,
             dm,
@@ -118,69 +154,72 @@ impl<'i, DM: DirectMap> KernelAllocatorImpl<'i, DM> {
 
     fn alloc_small(&mut self, block_size: u32) -> Result<PhysicalAddr> {
         let class_idx = (block_size.trailing_zeros() - MIN_SHIFT) as usize;
-        let class = &mut self.small[class_idx];
-        let palloc = &self.palloc;
+        let start_idx = self.small[class_idx].last_alloc_slab;
 
-        for slab in &mut class.slabs {
+        for offset in 0..MAX_SLABS_PER_CLASS {
+            let slab_idx = (start_idx + offset) % MAX_SLABS_PER_CLASS;
+            let slab = &mut self.small[class_idx].slabs[slab_idx];
             if slab.in_use && slab.free_count > 0 {
-                return alloc_from_small_slab(slab, self.dm);
+                self.small[class_idx].last_alloc_slab = slab_idx;
+                let block = self.small[class_idx].block_size as usize;
+                return alloc_from_small_slab(slab, block, self.dm);
             }
         }
 
-        for slab in &mut class.slabs {
-            if !slab.in_use {
-                init_small_slab(palloc, slab, class.block_size, self.dm)?;
-                return alloc_from_small_slab(slab, self.dm);
+        for slab_idx in 0..MAX_SLABS_PER_CLASS {
+            if !self.small[class_idx].slabs[slab_idx].in_use {
+                let base = {
+                    let slab = &mut self.small[class_idx].slabs[slab_idx];
+                    let block = self.small[class_idx].block_size;
+                    init_small_slab(self.palloc, slab, block, self.dm)?;
+                    slab.base.as_usize()
+                };
+                self.small_slab_map_insert(base, class_idx, slab_idx)?;
+                self.small[class_idx].last_alloc_slab = slab_idx;
+                let slab = &mut self.small[class_idx].slabs[slab_idx];
+                let block = self.small[class_idx].block_size as usize;
+                return alloc_from_small_slab(slab, block, self.dm);
             }
         }
 
         Err(MemoryError::TooManySlabs {
-            class_size: class.block_size,
+            class_size: self.small[class_idx].block_size,
         })
     }
 
     fn free_small(&mut self, addr: PhysicalAddr) -> Result<bool> {
         let p = addr.as_usize();
+        let page_base = p & PAGE_MASK;
+        let Some((class_idx, slab_idx)) = self.small_slab_map_get(page_base) else {
+            return Ok(false);
+        };
 
-        for class in &mut self.small {
-            for slab in &mut class.slabs {
-                if !slab.in_use {
-                    continue;
-                }
+        let slab = &mut self.small[class_idx].slabs[slab_idx];
+        let offset = p - slab.base.as_usize();
+        let block_size = self.small[class_idx].block_size as usize;
 
-                let start = slab.base.as_usize();
-                let end = start + PAGE_SIZE;
-                if p < start || p >= end {
-                    continue;
-                }
-
-                let block_size = slab.block_size as usize;
-                let offset = p - start;
-                if offset % block_size != 0 {
-                    return Err(MemoryError::SlabAlignmentMismatch {
-                        addr: p,
-                        block_size,
-                    });
-                }
-
-                let idx = (offset / block_size) as u32;
-                unsafe {
-                    *small_slab_link_ptr(slab, idx, self.dm) = slab.free_head;
-                }
-                slab.free_head = idx;
-                slab.free_count += 1;
-
-                if slab.free_count == slab.capacity {
-                    let base = slab.base;
-                    *slab = Slab::empty();
-                    self.palloc.free(base)?;
-                }
-
-                return Ok(true);
-            }
+        if offset % block_size != 0 {
+            return Err(MemoryError::SlabAlignmentMismatch {
+                addr: p,
+                block_size,
+            });
         }
 
-        Ok(false)
+        let idx = (offset / block_size) as u16;
+        unsafe {
+            *small_slab_link_ptr(slab, idx, self.dm) = slab.free_head;
+        }
+        slab.free_head = idx;
+        slab.free_count += 1;
+
+        if slab.free_count == slab.capacity {
+            let base = slab.base;
+            *slab = Slab::empty();
+            self.small_slab_map_remove(page_base);
+            self.palloc.free(base)?;
+        }
+
+        Ok(true)
     }
 
     fn alloc_large(&mut self, class_size: usize) -> Result<PhysicalAddr> {
@@ -219,6 +258,90 @@ impl<'i, DM: DirectMap> KernelAllocatorImpl<'i, DM> {
             addr: addr.as_usize(),
         })
     }
+
+    fn small_slab_map_insert(
+        &mut self,
+        page_base: usize,
+        class_idx: usize,
+        slab_idx: usize,
+    ) -> Result<()> {
+        let value = (class_idx * MAX_SLABS_PER_CLASS + slab_idx + 1) as u16;
+        for probe in 0..SMALL_SLAB_MAP_SIZE {
+            let idx = (hash_page_base(page_base) + probe) & (SMALL_SLAB_MAP_SIZE - 1);
+            let entry = self.small_slab_map[idx];
+            if entry.value == 0 || entry.key_page_plus_one == to_page_plus_one(page_base) {
+                self.small_slab_map[idx] = SmallSlabMapEntry {
+                    key_page_plus_one: to_page_plus_one(page_base),
+                    value,
+                    _reserved: 0,
+                };
+                return Ok(());
+            }
+        }
+
+        Err(MemoryError::TooManySlabs {
+            class_size: self.small[class_idx].block_size,
+        })
+    }
+
+    fn small_slab_map_get(&self, page_base: usize) -> Option<(usize, usize)> {
+        for probe in 0..SMALL_SLAB_MAP_SIZE {
+            let idx = (hash_page_base(page_base) + probe) & (SMALL_SLAB_MAP_SIZE - 1);
+            let entry = self.small_slab_map[idx];
+            if entry.value == 0 {
+                return None;
+            }
+            if entry.key_page_plus_one == to_page_plus_one(page_base) {
+                let unpacked = entry.value as usize - 1;
+                return Some((
+                    unpacked / MAX_SLABS_PER_CLASS,
+                    unpacked % MAX_SLABS_PER_CLASS,
+                ));
+            }
+        }
+
+        None
+    }
+
+    fn small_slab_map_remove(&mut self, page_base: usize) {
+        let mut removed_idx = None;
+        for probe in 0..SMALL_SLAB_MAP_SIZE {
+            let idx = (hash_page_base(page_base) + probe) & (SMALL_SLAB_MAP_SIZE - 1);
+            let entry = self.small_slab_map[idx];
+            if entry.value == 0 {
+                return;
+            }
+            if entry.key_page_plus_one == to_page_plus_one(page_base) {
+                removed_idx = Some(idx);
+                break;
+            }
+        }
+
+        let Some(remove_idx) = removed_idx else {
+            return;
+        };
+
+        self.small_slab_map[remove_idx] = SmallSlabMapEntry::empty();
+        let mut scan = (remove_idx + 1) & (SMALL_SLAB_MAP_SIZE - 1);
+        for _ in 0..SMALL_SLAB_MAP_SIZE {
+            let entry = self.small_slab_map[scan];
+            if entry.value == 0 {
+                return;
+            }
+            self.small_slab_map[scan] = SmallSlabMapEntry::empty();
+
+            for probe in 0..SMALL_SLAB_MAP_SIZE {
+                let idx = (hash_page_base(from_page_plus_one(entry.key_page_plus_one)) + probe)
+                    & (SMALL_SLAB_MAP_SIZE - 1);
+                if self.small_slab_map[idx].value == 0 {
+                    self.small_slab_map[idx] = entry;
+                    break;
+                }
+            }
+
+            scan = (scan + 1) & (SMALL_SLAB_MAP_SIZE - 1);
+        }
+    }
 }
 
 fn init_small_slab(
@@ -228,7 +351,7 @@ fn init_small_slab(
     dm: &impl DirectMap,
 ) -> Result<()> {
     let base = palloc.alloc(1)?;
-    let capacity = PAGE_SIZE as u32 / block_size;
+    let capacity = (PAGE_SIZE / block_size as usize) as u16;
     if capacity == 0 {
         return Err(MemoryError::InvalidSlabCapacity);
     }
@@ -236,14 +359,12 @@ fn init_small_slab(
     *slab = Slab {
         in_use: true,
         base,
-        block_size,
         capacity,
         free_count: capacity,
         free_head: 0,
     };
 
-    let mut i = 0;
-    while i < capacity {
+    for i in 0..capacity {
         let next = if i + 1 < capacity {
             i + 1
         } else {
@@ -252,20 +373,26 @@ fn init_small_slab(
         unsafe {
             *small_slab_link_ptr(slab, i, dm) = next;
         }
-        i += 1;
     }
 
     Ok(())
 }
 
 const fn build_small_classes() -> [SizeClass; SMALL_CLASS_COUNT] {
-    let mut classes = [SizeClass::new(0); SMALL_CLASS_COUNT];
-    let mut i = 0;
-    while i < SMALL_CLASS_COUNT {
-        classes[i] = SizeClass::new(1u32 << (MIN_SHIFT + i as u32));
-        i += 1;
-    }
-    classes
+    [
+        SizeClass::new(SMALL_CLASS_SIZES[0]),
+        SizeClass::new(SMALL_CLASS_SIZES[1]),
+        SizeClass::new(SMALL_CLASS_SIZES[2]),
+        SizeClass::new(SMALL_CLASS_SIZES[3]),
+        SizeClass::new(SMALL_CLASS_SIZES[4]),
+        SizeClass::new(SMALL_CLASS_SIZES[5]),
+        SizeClass::new(SMALL_CLASS_SIZES[6]),
+        SizeClass::new(SMALL_CLASS_SIZES[7]),
+        SizeClass::new(SMALL_CLASS_SIZES[8]),
+        SizeClass::new(SMALL_CLASS_SIZES[9]),
+        SizeClass::new(SMALL_CLASS_SIZES[10]),
+        SizeClass::new(SMALL_CLASS_SIZES[11]),
+    ]
 }
 
 fn size_to_class(size: usize) -> Result<usize> {
@@ -277,14 +404,10 @@ fn size_to_class(size: usize) -> Result<usize> {
         });
     }
 
-    let mut class_size = MIN_ALLOC_SIZE;
-    while class_size < requested {
-        class_size <<= 1;
-    }
-    Ok(class_size)
+    Ok(requested.next_power_of_two().max(MIN_ALLOC_SIZE))
 }
 
-fn alloc_from_small_slab(slab: &mut Slab, dm: &impl DirectMap) -> Result<PhysicalAddr> {
+fn alloc_from_small_slab(slab: &mut Slab, block_size: usize, dm: &impl DirectMap) -> Result<PhysicalAddr> {
     let idx = slab.free_head;
     if idx == FREE_LIST_END {
         return Err(MemoryError::SlabEmpty);
@@ -294,13 +417,28 @@ fn alloc_from_small_slab(slab: &mut Slab, dm: &impl DirectMap) -> Result<Physica
     slab.free_head = next;
     slab.free_count -= 1;
 
-    let offset = idx as usize * slab.block_size as usize;
+    let offset = idx as usize * block_size;
     Ok(slab.base.add(offset))
 }
 
-unsafe fn small_slab_link_ptr(slab: &Slab, idx: u32, map: &impl DirectMap) -> *mut u32 {
-    let addr = slab.base.as_usize() + idx as usize * slab.block_size as usize;
-    PhysicalAddr::new(addr).to_virtual(map).as_ptr::<u32>()
+unsafe fn small_slab_link_ptr(slab: &Slab, idx: u16, map: &impl DirectMap) -> *mut u16 {
+    let addr = slab.base.as_usize() + idx as usize * (PAGE_SIZE / slab.capacity as usize);
+    PhysicalAddr::new(addr).to_virtual(map).as_ptr::<u16>()
+}
+
+#[inline(always)]
+const fn hash_page_base(page_base: usize) -> usize {
+    ((page_base >> 21).wrapping_mul(0x9E37_79B9_7F4A_7C15usize)) >> 2
+}
+
+#[inline(always)]
+const fn to_page_plus_one(page_base: usize) -> u32 {
+    (page_base / PAGE_SIZE + 1) as u32
+}
+
+#[inline(always)]
+const fn from_page_plus_one(page_plus_one: u32) -> usize {
+    (page_plus_one as usize - 1) * PAGE_SIZE
 }
 
 pub struct KernelAllocator<'i, DM: DirectMap>(spin::Mutex<KernelAllocatorImpl<'i, DM>>);
